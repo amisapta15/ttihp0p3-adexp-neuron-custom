@@ -1,0 +1,18 @@
+[submodule "src/ip/sky130_ef_ip__biasgen"]
+	path = src/ip/sky130_ef_ip__biasgen
+	url = https://github.com/RTimothyEdwards/sky130_ef_ip__biasgen.git
+[submodule "src/ip/sky130_ef_ip__adc3v_12bit"]
+	path = src/ip/sky130_ef_ip__adc3v_12bit
+	url = https://github.com/RTimothyEdwards/sky130_ef_ip__adc3v_12bit
+[submodule "src/ip/sky130_ef_ip__opamp"]
+	path = src/ip/sky130_ef_ip__opamp
+	url = https://github.com/RTimothyEdwards/sky130_ef_ip__opamp
+[submodule "src/ip/sky130_ef_ip__analog_switches"]
+	path = src/ip/sky130_ef_ip__analog_switches
+	url = https://github.com/RTimothyEdwards/sky130_ef_ip__analog_switches.git
+[submodule "src/ip/sky130_ef_ip__samplehold"]
+	path = src/ip/sky130_ef_ip__samplehold
+	url = https://github.com/RTimothyEdwards/sky130_ef_ip__samplehold.git
+[submodule "src/ip/sky130_ef_ip__rdac3v_8bit"]
+	path = src/ip/sky130_ef_ip__rdac3v_8bit
+	url = https://github.com/fossi-foundation/sky130_ef_ip__rdac3v_8bit.git
