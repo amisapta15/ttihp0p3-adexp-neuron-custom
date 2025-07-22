@@ -1,21 +1,21 @@
 # Tiny Tapeout project information
 project:
-  title:        ""      # Project title
-  author:       ""      # Your name
+  title:        "AdExp DPI Neuron "      # Project title
+  author:       "Saptarshi Ghosh"      # Your name
   discord:      ""      # Your discord username, for communication and automatically assigning you a Tapeout role (optional)
-  description:  ""      # One line description of what your project does
+  description:  "Adaptive Exponential Integrate-and-Fire Neuron made using DPI circuits in subthreshold regieme "      # One line description of what your project does
   language:     "Analog" # other examples include Verilog, Amaranth, VHDL, etc
   clock_hz:     0       # Clock frequency in Hz (or 0 if not applicable)
 
   # How many tiles your design occupies? A single tile is about 200x150 uM.
-  tiles: "1x1"          # Valid values for analog projects: 1x2, 1x2, 2x2
+  tiles: "1x2"          # Valid values for analog projects: 1x2, 1x2, 2x2
 
   # How many analog pins does your project use?
   analog_pins: 2        # Valid values: 0 to 6
   uses_3v3: false       # Keep false for this shuttle
 
   # Your top module name must start with "tt_um_". Make it unique by including your github username:
-  top_module:  "tt_um_example"
+  top_module:  "tt_um_dpi_adexp"
 
   # List your project's source files here. Source files must be in ./src and you must list each source file separately, one per line:
   source_files:        
