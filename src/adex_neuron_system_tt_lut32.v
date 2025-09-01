@@ -223,7 +223,7 @@ always @(posedge clk) begin
                     compute_state <= C_DRIVE;
                 end
                 C_DRIVE: begin
-                    temp_calc <= temp_calc - w + u8_to_signed_q_direct(params[6]);
+                    temp_calc <= temp_calc - w + u8_to_q_unsigned_direct(params[6]);
                     compute_state <= C_DV;
                 end
                 C_DV: begin
