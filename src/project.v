@@ -22,7 +22,7 @@ module tt_um_dpi_adexp (
 // List all unused inputs to prevent warnings
 wire _unused = &{ena, 1'b0};
 
-adex_neuron_system_tt_lut32 core (
+adex_neuron_system_tt_lut16 core (
     .clk(clk),
     .rst_n(rst_n),
     .ui_in(ui_in),
