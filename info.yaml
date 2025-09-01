@@ -3,8 +3,8 @@ project:
   title:        "AdExp DPI Neuron "      # Project title
   author:       "Saptarshi Ghosh"      # Your name
   discord:      ""      # Your discord username, for communication and automatically assigning you a Tapeout role (optional)
-  description:  "Adaptive Exponential Integrate-and-Fire Neuron made using DPI circuits in subthreshold regieme "      # One line description of what your project does
-  language:     "Analog" # other examples include Verilog, Amaranth, VHDL, etc
+  description:  "Adaptive Exponential Integrate-and-Fire Neuron "      # One line description of what your project does
+  language:     "Verilog" # other examples include Verilog, Amaranth, VHDL, etc
   clock_hz:     0       # Clock frequency in Hz (or 0 if not applicable)
 
   # How many tiles your design occupies? A single tile is about 200x150 uM.
@@ -20,40 +20,42 @@ project:
   # List your project's source files here. Source files must be in ./src and you must list each source file separately, one per line:
   source_files:        
     - "project.v"
+    - "adex_neuron_system_tt_lut16.v"
+    - "adex_neuron_system_tt_lut32.v"
 
 # The pinout of your project. Leave unused pins blank. DO NOT delete or add any pins.
 pinout:
-  # Inputs
-  ui[0]: "control[0]"
-  ui[1]: "control[1]"
-  ui[2]: "control[2]"
-  ui[3]: "control[3]"
-  ui[4]: ""
-  ui[5]: ""
-  ui[6]: ""
-  ui[7]: ""
+  # Inputs (ui_in[7:0])
+  ui[0]: "param_data[0]"     # Nibble loader bit 0
+  ui[1]: "param_data[1]"     # Nibble loader bit 1
+  ui[2]: "param_data[2]"     # Nibble loader bit 2
+  ui[3]: "param_data[3]"     # Nibble loader bit 3
+  ui[4]: "param_load"        # Strobe/load signal
+  ui[5]: "param_reset"       # Reset neuron state
+  ui[6]: "stim_enable"       # Enable constant input current
+  ui[7]: "stim_delta"        # Small bias to vary input current
 
-  # Outputs
-  uo[0]: "out[0]"
-  uo[1]: ""
-  uo[2]: ""
-  uo[3]: ""
-  uo[4]: ""
-  uo[5]: ""
-  uo[6]: ""
-  uo[7]: ""
+  # Outputs (uo_out[7:0])
+  uo[0]: "spike"             # 1 when Vm crosses threshold
+  uo[1]: "vmem[0]"           # Membrane potential LSB
+  uo[2]: "vmem[1]"
+  uo[3]: "vmem[2]"
+  uo[4]: "vmem[3]"
+  uo[5]: "w[0]"              # Adaptation current LSB
+  uo[6]: "w[1]"
+  uo[7]: "w[2]"              # MSB slice of adaptation current
 
-  # Bidirectional pins
-  uio[0]: ""
-  uio[1]: ""
-  uio[2]: ""
-  uio[3]: ""
-  uio[4]: ""
-  uio[5]: ""
-  uio[6]: ""
-  uio[7]: ""
+  # Bidirectional pins (uio[7:0])
+  uio[0]: "debug_mux[0]"     # Debug select bit 0
+  uio[1]: "debug_mux[1]"     # Debug select bit 1
+  uio[2]: "debug_out[0]"     # Debug output (when enabled)
+  uio[3]: "debug_out[1]"
+  uio[4]: ""                 # Spare
+  uio[5]: ""                 # Spare
+  uio[6]: ""                 # Spare
+  uio[7]: ""                 # Spare
 
-  # Analog pins - make sure to also set "analog_pins" above, else the pins won't be connected
+  # Analog pins - unused for digital-only neuron core
   ua[0]: ""
   ua[1]: ""
   ua[2]: ""
