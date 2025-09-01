@@ -1,14 +1,8 @@
-// ============================================================================
 /*
   File: adex_neuron_system_tt_lut16.v
   Compact Verilog-2001 implementation with 16-entry LUT for TinyTapeout (IHP 25b).
   - Optimized for smaller area (1x2 tile ≈ 202 µm × 313 µm)
-  - 7/7/7 pin contract:
-      ui_in  [6:0] : control inputs (ui_in[6]=clk, [5]=reset, [4]=load_mode,
-                      [3]=load_enable, [2]=enable_core, [1]=debug_mode, [0]=reserved)
-      uo_out [6:0] : outputs (uo_out[0]=spike, uo_out[6:1]=6-bit value)
-      uio    [6:0] : bidirectional pins; loader reads nibble from uio[3:0]
-  - Loader: parallel nibble loader, requires footer nibble 4'b1111 to commit params.
+  - Interface adapted for standard TinyTapeout wrapper.
   - Core: AdEx-like adaptive exponential IF, Q4.12 fixed point (signed 16-bit).
   - Outputs: top-6 bits of Vm (or w if debug_mode=1) on uo_out[6:1], spike on uo_out[0].
   - Written to be synthesizable with OpenLane (Verilog-2001, no SystemVerilog).
@@ -16,16 +10,19 @@
  // ============================================================================
 
 module adex_neuron_system_tt_lut16 (
-    input  [6:0] ui_in,
-    output [6:0] uo_out,
-    inout  [6:0] uio
+    input             clk,
+    input             rst_n,
+    input       [7:0] ui_in,
+    output      [7:0] uo_out,
+    input       [7:0] uio_in,
+    output      [7:0] uio_out,
+    output      [7:0] uio_oe
 );
 
 // -----------------------------------------------------------------------------
 // Port unpacking
 // -----------------------------------------------------------------------------
-wire clk         = ui_in[6];
-wire reset       = ui_in[5];
+wire reset       = ~rst_n;      // reset is active-high internally
 wire load_mode   = ui_in[4];
 wire load_enable = ui_in[3];
 wire enable_core = ui_in[2];
@@ -33,7 +30,11 @@ wire debug_mode  = ui_in[1];
 
 // nibble inputs from uio[3:0] (external master must drive them during load_mode)
 wire [3:0] nibble_in;
-assign nibble_in = uio[3:0];
+assign nibble_in = uio_in[3:0];
+
+// This module only reads from uio, so set it to input-only.
+assign uio_out = 8'b0;
+assign uio_oe  = 8'b0; // 0=input, 1=output
 
 // -----------------------------------------------------------------------------
 // Loader: nibble-based FSM (IDLE, SHIFT, LATCH, WAIT_FOOTER, READY)
@@ -64,7 +65,7 @@ reg       r_ready;
 
 // outputs assignments
 reg  [6:0] uo_out_reg;
-assign uo_out = uo_out_reg;
+assign uo_out = {1'b0, uo_out_reg}; // Pad 7-bit output to match 8-bit wrapper port
 
 // map loader outputs to wires for core
 wire [7:0] p_DeltaT = r_DeltaT;
@@ -262,7 +263,7 @@ endfunction
 
 // compact exp() LUT: 16-entry (half the size of LUT32)
 function signed [15:0] exp_q;
-    input signed [15:0] arg;
+    input signed [15:0] arg_in; // Renamed to fix VARHIDDEN warning
     integer idx;
     reg signed [15:0] val;
     integer span;
@@ -272,12 +273,12 @@ function signed [15:0] exp_q;
         RANGE_MIN = (-16'sd4) <<< 12;
         RANGE_MAX = ( 16'sd8) <<< 12;
         span = 16;
-        if (arg < RANGE_MIN) begin
+        if (arg_in < RANGE_MIN) begin
             idx = 0;
-        end else if (arg > RANGE_MAX) begin
+        end else if (arg_in > RANGE_MAX) begin
             idx = span - 1;
         end else begin
-            idx = ((arg - RANGE_MIN) * span) / (RANGE_MAX - RANGE_MIN + 1);
+            idx = ((arg_in - RANGE_MIN) * span) / (RANGE_MAX - RANGE_MIN + 1);
         end
 
         case (idx)
