@@ -6,7 +6,7 @@
 `default_nettype none
 
 // Uncomment to switch back to LUT16
-//`define USE_LUT16
+`define USE_LUT16
 
 module tt_um_dpi_adexp (
     input  wire [7:0] ui_in,    // Dedicated inputs
