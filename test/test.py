@@ -110,5 +110,5 @@ async def test_regular_spiking_mode(dut):
         
         dut._log.info("Regular spiking test PASSED")
     else:
-        dut._log.error(f"Only {len(spike_times)} spikes detected - test failed")
+        dut._log.error(f"Only {len(spike_times)} spikes detected - test fasiled")
         assert False, "Insufficient spikes for regular spiking test"
