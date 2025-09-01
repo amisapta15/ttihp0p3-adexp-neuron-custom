@@ -165,8 +165,9 @@ module adex_neuron_system_tt_lut32 (
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            v_q <= -32'sd65 <<< 7;
-            w_q <= 32'sd0;
+            v_q <= -15'sd65 <<< 7;
+            w_q <= 15'sd0;
+            params[6] <= 8'd200;  // Default Ibias ~ strong drive
         end else begin
             if (ui_in[2]) begin
                 if (spike) begin

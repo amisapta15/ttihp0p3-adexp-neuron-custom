@@ -37,6 +37,24 @@ async def monitor_spikes(dut, cycles=5000):
         prev = val
     return spikes
 
+async def load_nibble(dut, nibble):
+    """Drive a 4-bit nibble into loader FSM."""
+    dut.uio_in.value = nibble & 0xF
+    dut.ui_in.value = (1 << 4) | (1 << 3)
+    await RisingEdge(dut.clk)
+    dut.ui_in.value = (1 << 4)
+    await RisingEdge(dut.clk)
+
+async def load_parameters(dut, params):
+    """Load 8 parameters: DeltaT, TauW, a, b, Vreset, VT, Ibias, C."""
+    order = ["DeltaT", "TauW", "a", "b", "Vreset", "VT", "Ibias", "C"]
+    for name in order:
+        val = params.get(name, 0) & 0xFF
+        hi, lo = (val >> 4) & 0xF, val & 0xF
+        await load_nibble(dut, hi)
+        await load_nibble(dut, lo)
+    await wait_for_stable(dut, 5)
+
 # ------------------------ Tests ------------------------
 @cocotb.test()
 async def test_basic_spiking(dut):
@@ -51,6 +69,19 @@ async def test_basic_spiking(dut):
     await ClockCycles(dut.clk, 10)
     dut.rst_n.value = 1
     await wait_for_stable(dut, 20)
+
+    # Load spiking parameters
+    basic_params = {
+        "DeltaT": encode_signed_direct(2),
+        "TauW":   encode_unsigned_direct(80),
+        "a":      encode_unsigned_direct(1),
+        "b":      encode_unsigned_direct(3),
+        "Vreset": encode_signed_direct(-65),
+        "VT":     encode_signed_direct(-50),
+        "Ibias":  encode_unsigned_direct(200),
+        "C":      encode_unsigned_direct(8),
+    }
+    await load_parameters(dut, basic_params)
 
     # Enable neuron (bit 2)
     dut.ui_in.value = (1 << 2)
@@ -75,6 +106,19 @@ async def test_spike_frequency_adaptation(dut):
     dut.rst_n.value = 1
     await wait_for_stable(dut, 20)
 
+    # Load adaptation parameters
+    adapt_params = {
+        "DeltaT": encode_signed_direct(2),
+        "TauW":   encode_unsigned_direct(150),
+        "a":      encode_unsigned_direct(2),
+        "b":      encode_unsigned_direct(8),
+        "Vreset": encode_signed_direct(-65),
+        "VT":     encode_signed_direct(-50),
+        "Ibias":  encode_unsigned_direct(220),
+        "C":      encode_unsigned_direct(10),
+    }
+    await load_parameters(dut, adapt_params)
+
     # Enable neuron (bit 2)
     dut.ui_in.value = (1 << 2)
     await wait_for_stable(dut, 50)
@@ -90,8 +134,8 @@ async def test_spike_frequency_adaptation(dut):
     first_half = isi[:len(isi)//2]
     second_half = isi[len(isi)//2:]
 
-    avg_first = sum(first_half)/len(first_half)
-    avg_second = sum(second_half)/len(second_half)
+    avg_first = sum(first_half) / len(first_half)
+    avg_second = sum(second_half) / len(second_half)
 
     dut._log.info(f"Avg ISI first half={avg_first}, second half={avg_second}")
     assert avg_second >= avg_first, "No clear adaptation observed"
