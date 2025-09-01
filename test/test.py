@@ -18,16 +18,14 @@ async def load_nibble(dut, nibble):
 @cocotb.test()
 async def test_neuron_spike(dut):
     """
-    Tests the AdEx neuron by loading a positive input current (Ibias)
+    Tests the AdEx neuron by loading a strong positive input current (Ibias)
     and waiting for it to spike.
     """
     dut._log.info("Start")
 
     # Define control bit positions from the Verilog code
     LOAD_MODE   = 1 << 4
-    LOAD_ENABLE = 1 << 3
     ENABLE_CORE = 1 << 2
-    DEBUG_MODE  = 1 << 1
 
     # Set the clock period to 10 us (100 KHz)
     clock = Clock(dut.clk, 10, units="us")
@@ -44,30 +42,36 @@ async def test_neuron_spike(dut):
     dut._log.info("Reset complete")
 
     # --- Parameter Loading Sequence ---
-    # We will load a positive Ibias to make the neuron spike.
-    # Ibias is the 7th parameter (index 6).
-    # Value to load: 150 (0x96), which is 150-128=22mV, a positive current.
-    dut._log.info("Loading Ibias parameter...")
+    # We will load a strong Ibias to guarantee a spike, plus the new C parameter.
+    # Ibias is param index 6. C is param index 7.
+    # New Ibias: 200 (0xC8), which is 200-128=72pA, a strong positive current.
+    # New C: 200 (0xC8), the default capacitance value.
+    dut._log.info("Beginning parameter loading...")
     
     # 1. Enter load mode and pulse load_enable to start the loader FSM
     dut.ui_in.value = LOAD_MODE
-    await load_nibble(dut, 0)
+    await load_nibble(dut, 0) # This first pulse is just to enter the SHIFT state.
 
-    # 2. Load dummy values for the first 6 parameters (12 nibbles)
+    # 2. Load dummy values for the first 6 parameters (indices 0-5 -> 12 nibbles)
     dut._log.info("Loading 6 dummy parameters...")
     for i in range(12):
         await load_nibble(dut, 0)
 
-    # 3. Load the Ibias value (0x96 = nibbles 9 and 6)
-    dut._log.info("Loading Ibias = 150 (0x96)...")
-    await load_nibble(dut, 0x9) # High nibble
-    await load_nibble(dut, 0x6) # Low nibble
+    # 3. Load the Ibias value (200 = 0xC8 = nibbles 0xC and 0x8)
+    dut._log.info("Loading Ibias (param 6) = 200 (0xC8)...")
+    await load_nibble(dut, 0xC) # High nibble
+    await load_nibble(dut, 0x8) # Low nibble
 
-    # 4. Load the footer nibble (0xF) to commit parameters
+    # 4. Load the C value (200 = 0xC8 = nibbles 0xC and 0x8)
+    dut._log.info("Loading C (param 7) = 200 (0xC8)...")
+    await load_nibble(dut, 0xC) # High nibble
+    await load_nibble(dut, 0x8) # Low nibble
+
+    # 5. Load the footer nibble (0xF) to commit all 8 parameters
     dut._log.info("Loading footer to commit...")
     await load_nibble(dut, 0xF)
     
-    # 5. Exit load mode
+    # 6. Exit load mode
     dut.ui_in.value = 0
     await ClockCycles(dut.clk, 2)
     dut._log.info("Parameter loading complete.")
@@ -89,4 +93,3 @@ async def test_neuron_spike(dut):
     
     # Assert that a spike was actually detected
     assert spike_detected, f"Neuron did not spike within {max_cycles} cycles."
-    dut._log.info("Test completed successfully.")

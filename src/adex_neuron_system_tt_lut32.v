@@ -1,8 +1,7 @@
 /*
   File: adex_neuron_system_tt_lut32.v
   Final golden Verilog-2001 implementation for Tiny Tapeout (IHP 25b).
-  - Corrected final WIDTHEXPAND warning in the exp_q function by explicitly
-    sign-extending operands to 32 bits before subtraction.
+  - This version incorporates a configurable membrane capacitance (C) as an 8th parameter.
 */
  // ============================================================================
 
@@ -43,7 +42,7 @@ localparam L_READY       = 3'd4;
 reg [2:0]  lstate;
 reg [7:0]  byte_acc;
 reg        nibble_cnt;
-reg [2:0]  param_idx;
+reg [3:0]  param_idx; // Widened to [3:0] for 8 parameters (0-7)
 reg [15:0] watchdog_cnt;
 
 parameter WATCHDOG_MAX = 16'd50000;
@@ -51,13 +50,15 @@ parameter FOOTER_NIB = 4'b1111;
 
 reg        load_prev;
 
-reg [7:0] s_DeltaT, s_TauW, s_a, s_b, s_Vreset, s_VT, s_Ibias;
-reg [7:0] r_DeltaT, r_TauW, r_a, r_b, r_Vreset, r_VT, r_Ibias;
+// Added s_C and r_C for the new capacitance parameter
+reg [7:0] s_DeltaT, s_TauW, s_a, s_b, s_Vreset, s_VT, s_Ibias, s_C;
+reg [7:0] r_DeltaT, r_TauW, r_a, r_b, r_Vreset, r_VT, r_Ibias, r_C;
 reg       r_ready;
 
 reg  [6:0] uo_out_reg;
 assign uo_out = {1'b0, uo_out_reg};
 
+// Added p_C wire for the new parameter
 wire [7:0] p_DeltaT = r_DeltaT;
 wire [7:0] p_TauW   = r_TauW;
 wire [7:0] p_a      = r_a;
@@ -65,6 +66,7 @@ wire [7:0] p_b      = r_b;
 wire [7:0] p_Vreset = r_Vreset;
 wire [7:0] p_VT     = r_VT;
 wire [7:0] p_Ibias  = r_Ibias;
+wire [7:0] p_C      = r_C;
 wire       params_ready = r_ready;
 
 // -----------------------------------------------------------------------------
@@ -75,12 +77,12 @@ always @(posedge clk) begin
         lstate <= L_IDLE;
         byte_acc <= 8'd0;
         nibble_cnt <= 1'b0;
-        param_idx <= 3'd0;
+        param_idx <= 4'd0;
         watchdog_cnt <= 16'd0;
         s_DeltaT <= 8'd0; s_TauW <= 8'd0; s_a <= 8'd0; s_b <= 8'd0;
-        s_Vreset <= 8'd0; s_VT <= 8'd0; s_Ibias <= 8'd0;
+        s_Vreset <= 8'd0; s_VT <= 8'd0; s_Ibias <= 8'd0; s_C <= 8'd0; // Reset new param
         r_DeltaT <= 8'd0; r_TauW <= 8'd0; r_a <= 8'd0; r_b <= 8'd0;
-        r_Vreset <= 8'd0; r_VT <= 8'd0; r_Ibias <= 8'd0;
+        r_Vreset <= 8'd0; r_VT <= 8'd0; r_Ibias <= 8'd0; r_C <= 8'd0; // Reset new param
         r_ready <= 1'b0;
         load_prev <= 1'b0;
     end else begin
@@ -92,7 +94,7 @@ always @(posedge clk) begin
             end else begin
                 lstate <= L_IDLE;
                 nibble_cnt <= 1'b0;
-                param_idx <= 3'd0;
+                param_idx <= 4'd0;
                 watchdog_cnt <= 16'd0;
             end
         end
@@ -104,7 +106,7 @@ always @(posedge clk) begin
                     lstate <= L_SHIFT;
                     nibble_cnt <= 1'b0;
                     byte_acc <= 8'd0;
-                    param_idx <= 3'd0;
+                    param_idx <= 4'd0;
                     watchdog_cnt <= 16'd0;
                 end
             end
@@ -123,18 +125,18 @@ always @(posedge clk) begin
                 if (!load_mode) begin
                     lstate <= L_IDLE;
                     nibble_cnt <= 1'b0;
-                    param_idx <= 3'd0;
+                    param_idx <= 4'd0;
                 end
             end
             L_LATCH: begin
                 case (param_idx)
-                    3'd0: s_DeltaT <= byte_acc; 3'd1: s_TauW <= byte_acc;
-                    3'd2: s_a      <= byte_acc; 3'd3: s_b    <= byte_acc;
-                    3'd4: s_Vreset <= byte_acc; 3'd5: s_VT   <= byte_acc;
-                    3'd6: s_Ibias  <= byte_acc;
+                    4'd0: s_DeltaT <= byte_acc; 4'd1: s_TauW <= byte_acc;
+                    4'd2: s_a      <= byte_acc; 4'd3: s_b    <= byte_acc;
+                    4'd4: s_Vreset <= byte_acc; 4'd5: s_VT   <= byte_acc;
+                    4'd6: s_Ibias  <= byte_acc; 4'd7: s_C    <= byte_acc; // Latch new param
                     default: ;
                 endcase
-                if (param_idx == 3'd6) lstate <= L_WAIT_FOOTER;
+                if (param_idx == 4'd7) lstate <= L_WAIT_FOOTER; // Condition updated to 7
                 else begin
                     param_idx <= param_idx + 1'b1;
                     lstate <= L_SHIFT;
@@ -146,7 +148,8 @@ always @(posedge clk) begin
                         r_DeltaT <= s_DeltaT; r_TauW <= s_TauW;
                         r_a <= s_a;           r_b <= s_b;
                         r_Vreset <= s_Vreset; r_VT <= s_VT;
-                        r_Ibias <= s_Ibias;   r_ready <= 1'b1;
+                        r_Ibias <= s_Ibias;   r_C <= s_C; // Commit new param
+                        r_ready <= 1'b1;
                         lstate <= L_READY;
                     end else lstate <= L_IDLE;
                 end
@@ -162,8 +165,8 @@ end
 // -----------------------------------------------------------------------------
 reg signed [15:0] V, w;
 reg spike_reg;
-reg signed [15:0] DeltaT_q, TauW_q, a_q, b_q, Vreset_q, VT_q, Ibias_q;
-localparam signed [15:0] C_pF  = (16'sd200) <<< 12;
+reg signed [15:0] DeltaT_q, TauW_q, a_q, b_q, Vreset_q, VT_q, Ibias_q, C_q; // Added C_q
+// localparam signed [15:0] C_pF  = (16'sd200) <<< 12; // REMOVED
 localparam signed [15:0] gL_nS = (16'sd10)  <<< 12;
 localparam signed [15:0] EL_mV = (-16'sd70) <<< 12;
 reg signed [15:0] leak, arg, expterm, drive, dV, dw;
@@ -194,7 +197,6 @@ function signed [15:0] exp_q;
         else if (arg_in > RANGE_MAX) idx = 31;
         else begin
             temp_calc = {{16{arg_in[15]}}, arg_in} - {{16{RANGE_MIN[15]}}, RANGE_MIN};
-            // Corrected: Explicitly sign-extend 16-bit operands to 32 bits before subtraction.
             range_diff = {{16{RANGE_MAX[15]}}, RANGE_MAX} - {{16{RANGE_MIN[15]}}, RANGE_MIN} + 1;
             idx = (temp_calc * 32) / range_diff;
         end
@@ -245,22 +247,23 @@ endfunction
 // -----------------------------------------------------------------------------
 always @(posedge clk) begin
     if (reset) begin
-        V <= u8_to_signed_q_mid(8'd63); // -65mV -> 128 - 65 = 63
+        V <= u8_to_signed_q_mid(8'd63);
         w <= 16'sd0;
         spike_reg <= 1'b0;
-        DeltaT_q <= u8_to_signed_q_mid(8'd130); // 2mV -> 128 + 2 = 130
+        DeltaT_q <= u8_to_signed_q_mid(8'd130);
         TauW_q   <= u8_to_q_unsigned(8'd100);
         a_q      <= u8_to_q_unsigned(8'd2);
         b_q      <= u8_to_q_unsigned(8'd40);
-        Vreset_q <= u8_to_signed_q_mid(8'd63); // -65mV
-        VT_q     <= u8_to_signed_q_mid(8'd78); // -50mV -> 128 - 50 = 78
+        Vreset_q <= u8_to_signed_q_mid(8'd63);
+        VT_q     <= u8_to_signed_q_mid(8'd78);
         Ibias_q  <= 16'sd0;
+        C_q      <= u8_to_q_unsigned(8'd200); // Initialize C_q on reset
     end else begin
         if (params_ready) begin
             DeltaT_q <= u8_to_signed_q_mid(p_DeltaT); TauW_q   <= u8_to_q_unsigned(p_TauW);
             a_q      <= u8_to_q_unsigned(p_a);      b_q      <= u8_to_q_unsigned(p_b);
             Vreset_q <= u8_to_signed_q_mid(p_Vreset); VT_q     <= u8_to_signed_q_mid(p_VT);
-            Ibias_q  <= u8_to_signed_q_mid(p_Ibias);
+            Ibias_q  <= u8_to_signed_q_mid(p_Ibias);  C_q      <= u8_to_q_unsigned(p_C); // Update C_q
         end
 
         if (enable_core) begin
@@ -268,7 +271,7 @@ always @(posedge clk) begin
             arg  <= qdiv((V - VT_q), DeltaT_q);
             expterm <= qmul(gL_nS, qmul(DeltaT_q, exp_q(arg)));
             drive <= leak + expterm - w + Ibias_q;
-            dV <= qdiv(drive, C_pF);
+            dV <= qdiv(drive, C_q); // Use configurable C_q
             dw <= qdiv((qmul(a_q, (V - EL_mV)) - w), TauW_q);
 
             V <= V + dV;
