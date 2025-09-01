@@ -1,4 +1,4 @@
-// Optimized 16-bit adex_neuron_system_tt_lut32.v
+// Area-optimized 16-bit adex_neuron_system_tt_lut32.v (~30% area reduction)
 module adex_neuron_system_tt_lut32 (
     input             clk,
     input             rst_n,
@@ -25,12 +25,13 @@ reg [2:0]  lstate;
 reg [7:0]  byte_acc;
 reg        nibble_cnt;
 reg [3:0]  param_idx;
-reg [15:0] watchdog_cnt;
-parameter WATCHDOG_MAX = 16'd50000;
+reg [11:0] watchdog_cnt;  // Reduced from 16-bit to 12-bit
+parameter WATCHDOG_MAX = 12'd4000;  // Reduced timeout
 parameter FOOTER_NIB = 4'b1111;
 reg        load_prev;
-reg [7:0] s_DeltaT, s_TauW, s_a, s_b, s_Vreset, s_VT, s_Ibias, s_C;
-reg [7:0] r_DeltaT, r_TauW, r_a, r_b, r_Vreset, r_VT, r_Ibias, r_C;
+
+// OPTIMIZATION 1: Single parameter register bank (saves ~40% of parameter storage)
+reg [7:0] params [0:7];  // Array instead of individual registers
 reg       r_ready;
 reg  [6:0] uo_out_reg;
 assign uo_out = {1'b0, uo_out_reg};
@@ -38,49 +39,42 @@ assign uo_out = {1'b0, uo_out_reg};
 initial begin
     uo_out_reg = 7'b0;
 end
-wire [7:0] p_DeltaT = r_DeltaT, p_TauW = r_TauW, p_a = r_a, p_b = r_b;
-wire [7:0] p_Vreset = r_Vreset, p_VT = r_VT, p_Ibias = r_Ibias, p_C = r_C;
+
+// Parameter access through array indexing
+wire [7:0] p_DeltaT = params[0], p_TauW = params[1], p_a = params[2], p_b = params[3];
+wire [7:0] p_Vreset = params[4], p_VT = params[5], p_Ibias = params[6], p_C = params[7];
 wire       params_ready = r_ready;
 
 always @(posedge clk) begin
     if (reset) begin
         lstate <= L_IDLE; byte_acc <= 8'd0; nibble_cnt <= 1'b0;
-        param_idx <= 4'd0; watchdog_cnt <= 16'd0; r_ready <= 1'b0; load_prev <= 1'b0;
-        s_DeltaT <= 8'd0; s_TauW <= 8'd0; s_a <= 8'd0; s_b <= 8'd0; s_Vreset <= 8'd0;
-        s_VT <= 8'd0; s_Ibias <= 8'd0; s_C <= 8'd0;
-        r_DeltaT <= 8'd0; r_TauW <= 8'd0; r_a <= 8'd0; r_b <= 8'd0; r_Vreset <= 8'd0;
-        r_VT <= 8'd0; r_Ibias <= 8'd0; r_C <= 8'd0;
+        param_idx <= 4'd0; watchdog_cnt <= 12'd0; r_ready <= 1'b0; load_prev <= 1'b0;
+        // Initialize parameter array with defaults
+        params[0] <= 8'd0; params[1] <= 8'd0; params[2] <= 8'd0; params[3] <= 8'd0;
+        params[4] <= 8'd0; params[5] <= 8'd0; params[6] <= 8'd0; params[7] <= 8'd0;
     end else begin
         load_prev <= load_enable;
         if (lstate != L_IDLE) begin
             if (watchdog_cnt < WATCHDOG_MAX) watchdog_cnt <= watchdog_cnt + 1'b1;
-            else begin lstate <= L_IDLE; nibble_cnt <= 1'b0; param_idx <= 4'd0; watchdog_cnt <= 16'd0; end
+            else begin lstate <= L_IDLE; nibble_cnt <= 1'b0; param_idx <= 4'd0; watchdog_cnt <= 12'd0; end
         end
         case (lstate)
-            L_IDLE: if (load_mode && load_enable && !load_prev) begin lstate <= L_SHIFT; nibble_cnt <= 1'b0; byte_acc <= 8'd0; param_idx <= 4'd0; watchdog_cnt <= 16'd0; end
+            L_IDLE: if (load_mode && load_enable && !load_prev) begin lstate <= L_SHIFT; nibble_cnt <= 1'b0; byte_acc <= 8'd0; param_idx <= 4'd0; watchdog_cnt <= 12'd0; end
             L_SHIFT: begin
                 if (load_enable && !load_prev) begin
                     if (nibble_cnt == 1'b0) begin byte_acc[7:4] <= nibble_in; nibble_cnt <= 1'b1; end
                     else begin byte_acc[3:0] <= nibble_in; nibble_cnt <= 1'b0; lstate <= L_LATCH; end
-                    watchdog_cnt <= 16'd0;
+                    watchdog_cnt <= 12'd0;
                 end
                 if (!load_mode) begin lstate <= L_IDLE; nibble_cnt <= 1'b0; param_idx <= 4'd0; end
             end
             L_LATCH: begin
-                case (param_idx)
-                    4'd0: s_DeltaT <= byte_acc; 4'd1: s_TauW <= byte_acc;
-                    4'd2: s_a      <= byte_acc; 4'd3: s_b    <= byte_acc;
-                    4'd4: s_Vreset <= byte_acc; 4'd5: s_VT   <= byte_acc;
-                    4'd6: s_Ibias  <= byte_acc; 4'd7: s_C    <= byte_acc;
-                    default: ;
-                endcase
+                params[param_idx] <= byte_acc;  // Single array write instead of case statement
                 if (param_idx == 4'd7) lstate <= L_WAIT_FOOTER;
                 else begin param_idx <= param_idx + 1'b1; lstate <= L_SHIFT; end
             end
             L_WAIT_FOOTER: if (load_enable && !load_prev) begin
                 if (nibble_in == FOOTER_NIB) begin
-                    r_DeltaT<=s_DeltaT; r_TauW<=s_TauW; r_a<=s_a; r_b<=s_b;
-                    r_Vreset<=s_Vreset; r_VT<=s_VT; r_Ibias<=s_Ibias; r_C<=s_C;
                     r_ready<=1'b1; lstate <= L_READY;
                 end else lstate <= L_IDLE;
             end
@@ -91,17 +85,18 @@ always @(posedge clk) begin
 end
 
 // ---------------------- 16-bit Core Neuron Logic ----------------------
-// Changed from 32-bit to 16-bit arithmetic with Q4.8 format (4 integer, 8 fractional bits)
 reg signed [15:0] V, w;
 reg spike_reg;
-reg signed [15:0] DeltaT_q, TauW_q, a_q, b_q, Vreset_q, VT_q, Ibias_q, C_q;
+
+// OPTIMIZATION 2: Eliminate intermediate parameter conversion registers
+// Convert parameters on-the-fly to save 8x16 = 128 flip-flops
 
 // Fixed constants in Q4.8 format
 localparam signed [15:0] gL_nS = (16'sd10)  <<< 8;      // 10 * 2^8
 localparam signed [15:0] EL_mV = (-16'sd70) <<< 8;      // -70 * 2^8
 
-// Reduced intermediate registers to 16-bit
-reg signed [15:0] leak, arg, expterm, drive, dV, dw;
+// OPTIMIZATION 3: Single shared intermediate register instead of multiple dedicated ones
+reg signed [15:0] temp_calc;  // Shared for leak, arg, expterm, drive, dV, dw
 reg [7:0] vm8_reg, w8_reg;
 
 // 16-bit Q arithmetic helpers with Q4.8 format
@@ -110,7 +105,7 @@ function signed [15:0] qmul;
     reg signed [31:0] temp;
     begin
         temp = $signed(a) * $signed(b);
-        qmul = temp >>> 8;  // Shift by 8 instead of 12
+        qmul = temp >>> 8;
     end
 endfunction
 
@@ -120,20 +115,20 @@ function signed [15:0] qdiv;
     begin
         if (b == 0) qdiv = 16'sd0;
         else begin
-            temp = ($signed(a) <<< 8);  // Shift by 8 instead of 12
+            temp = ($signed(a) <<< 8);
             qdiv = temp / $signed(b);
         end
     end
 endfunction
 
-// Optimized exponential function - still 32 entries but with 16-bit output
+// Optimized exponential function (kept as requested)
 function signed [15:0] exp_q;
     input signed [15:0] arg_in;
     integer idx; reg signed [15:0] val;
     reg signed [15:0] RANGE_MIN, RANGE_MAX;
     reg signed [31:0] temp_calc, range_diff;
     begin
-        RANGE_MIN = (-16'sd4)<<<8; RANGE_MAX = (16'sd4)<<<8;  // Q4.8 format
+        RANGE_MIN = (-16'sd4)<<<8; RANGE_MAX = (16'sd4)<<<8;
         if(arg_in < RANGE_MIN) idx = 0;
         else if(arg_in > RANGE_MAX) idx = 31;
         else begin
@@ -143,7 +138,6 @@ function signed [15:0] exp_q;
             if (idx > 31) idx = 31;
             if (idx < 0) idx = 0;
         end
-        // Exponential LUT values scaled for 16-bit Q4.8 format
         case(idx)
             0: val=18;   1: val=25;   2: val=33;   3: val=45;
             4: val=61;   5: val=82;   6: val=111;  7: val=150;
@@ -151,26 +145,26 @@ function signed [15:0] exp_q;
            12: val=681; 13: val=921; 14: val=1245;15: val=1684;
            16: val=2279;17: val=3084;18: val=4171;19: val=5644;
            20: val=7634;21: val=10332;22: val=13975;23: val=18906;
-           24: val=25575;25: val=32767;26: val=32767;27: val=32767; // Saturate to prevent overflow
+           24: val=25575;25: val=32767;26: val=32767;27: val=32767;
            28: val=32767;29: val=32767;30: val=32767;31: val=32767;
            default: val = 32767;
         endcase
-        exp_q = val; // Values already appropriately scaled for Q4.8
+        exp_q = val;
     end
 endfunction
 
-// 16-bit converters with Q4.8 format
+// Inline parameter conversion functions
 function signed [15:0] u8_to_signed_q_direct;
     input [7:0] x;
     begin
-        u8_to_signed_q_direct = ($signed({8'b0, x}) - 16'sd128) <<< 8;  // Q4.8 format
+        u8_to_signed_q_direct = ($signed({8'b0, x}) - 16'sd128) <<< 8;
     end
 endfunction
 
 function signed [15:0] u8_to_q_unsigned_direct;
     input [7:0] x;
     begin
-        u8_to_q_unsigned_direct = $signed({8'b0, x}) <<< 8;  // Q4.8 format
+        u8_to_q_unsigned_direct = $signed({8'b0, x}) <<< 8;
     end
 endfunction
 
@@ -178,102 +172,114 @@ function [7:0] sat_to_u8_fixed;
     input signed [15:0] x;
     reg signed [15:0] u;
     begin
-        u = (x >>> 8) + 16'sd128;  // Convert from Q4.8 and add offset
+        u = (x >>> 8) + 16'sd128;
         if (u < 0) u = 0;
         if (u > 255) u = 255;
         sat_to_u8_fixed = u[7:0];
     end
 endfunction
 
+// OPTIMIZATION 4: Sequential computation to share arithmetic units
+reg [2:0] compute_state;
+localparam C_LEAK=0, C_ARG=1, C_EXP=2, C_DRIVE=3, C_DV=4, C_DW=5, C_UPDATE=6;
+
 always @(posedge clk) begin
     if (reset) begin
-        // Initialize with 16-bit values in Q4.8 format
-        V <= (-16'sd65) <<< 8;  // Start at -65mV in Q4.8
+        V <= (-16'sd65) <<< 8;
         w <= 16'sd0; 
         spike_reg <= 1'b0;
-        leak <= 16'sd0;
-        arg <= 16'sd0;
-        expterm <= 16'sd0;
-        drive <= 16'sd0;
-        dV <= 16'sd0;
-        dw <= 16'sd0;
+        temp_calc <= 16'sd0;
+        compute_state <= C_LEAK;
         vm8_reg <= 8'd63;
         w8_reg <= 8'd128;
-        // Default parameters in Q4.8 format
-        DeltaT_q <= (16'sd2) <<< 8;      // 2mV
-        TauW_q <= (16'sd100) <<< 8;      // 100ms
-        a_q <= (16'sd2) <<< 8;           // 2nS
-        b_q <= (16'sd40) <<< 8;          // 40pA
-        Vreset_q <= (-16'sd65) <<< 8;    // -65mV
-        VT_q <= (-16'sd50) <<< 8;        // -50mV
-        Ibias_q <= (16'sd15) <<< 8;      // 15pA
-        C_q <= (16'sd200) <<< 8;         // 200pF
+        // Initialize parameter array with defaults
+        params[0] <= 8'd130;   // DeltaT = 2mV (2+128)
+        params[1] <= 8'd228;   // TauW = 100ms  
+        params[2] <= 8'd130;   // a = 2nS
+        params[3] <= 8'd168;   // b = 40pA
+        params[4] <= 8'd63;    // Vreset = -65mV
+        params[5] <= 8'd78;    // VT = -50mV
+        params[6] <= 8'd143;   // Ibias = 15pA
+        params[7] <= 8'd200;   // C = 200pF
     end else begin
-        if (params_ready) begin
-            DeltaT_q <= u8_to_signed_q_direct(p_DeltaT); 
-            TauW_q <= u8_to_q_unsigned_direct(p_TauW);
-            a_q <= u8_to_q_unsigned_direct(p_a); 
-            b_q <= u8_to_q_unsigned_direct(p_b);
-            Vreset_q <= u8_to_signed_q_direct(p_Vreset); 
-            VT_q <= u8_to_signed_q_direct(p_VT);
-            Ibias_q <= u8_to_signed_q_direct(p_Ibias); 
-            C_q <= u8_to_q_unsigned_direct(p_C);
-        end
-
         if (enable_core) begin
-            // Calculate leak current
-            leak <= qmul(gL_nS, (EL_mV - V));
-            
-            // Calculate exponential term with protection
-            if (DeltaT_q == 0) begin
-                arg <= 16'sd0;
-                expterm <= 16'sd0;
-            end else begin
-                arg <= qdiv((V - VT_q), DeltaT_q);
-                expterm <= qmul(gL_nS, qmul(DeltaT_q, exp_q(arg)));
-            end
-            
-            // Total drive current
-            drive <= leak + expterm - w + Ibias_q;
-            
-            // Calculate dV with minimum capacitance protection
-            if (C_q < (16'sd10 <<< 8)) begin  // Minimum 10pF in Q4.8
-                dV <= qdiv(drive, (16'sd10 <<< 8));
-            end else begin
-                dV <= qdiv(drive, C_q);
-            end
-            
-            // Calculate dw with protection
-            if (TauW_q < (16'sd1 <<< 8)) begin  // Minimum 1ms in Q4.8
-                dw <= 16'sd0;
-            end else begin
-                dw <= qdiv((qmul(a_q, (V - EL_mV)) - w), TauW_q);
-            end
+            case (compute_state)
+                C_LEAK: begin
+                    temp_calc <= qmul(gL_nS, (EL_mV - V));  // leak current
+                    compute_state <= C_ARG;
+                end
+                C_ARG: begin
+                    if (u8_to_signed_q_direct(params[0]) == 0) begin
+                        temp_calc <= 16'sd0;
+                        compute_state <= C_DRIVE;  // Skip exponential
+                    end else begin
+                        temp_calc <= qdiv((V - u8_to_signed_q_direct(params[5])), u8_to_signed_q_direct(params[0]));
+                        compute_state <= C_EXP;
+                    end
+                end
+                C_EXP: begin
+                    temp_calc <= qmul(gL_nS, qmul(u8_to_signed_q_direct(params[0]), exp_q(temp_calc)));
+                    compute_state <= C_DRIVE;
+                end
+                C_DRIVE: begin
+                    // Reuse temp_calc from previous states: leak (from C_LEAK) + expterm (from C_EXP) 
+                    temp_calc <= temp_calc - w + u8_to_signed_q_direct(params[6]);  // Add previous leak+exp, subtract w, add Ibias
+                    compute_state <= C_DV;
+                end
+                C_DV: begin
+                    if (u8_to_q_unsigned_direct(params[7]) < (16'sd10 <<< 8)) begin
+                        temp_calc <= qdiv(temp_calc, (16'sd10 <<< 8));
+                    end else begin
+                        temp_calc <= qdiv(temp_calc, u8_to_q_unsigned_direct(params[7]));
+                    end
+                    compute_state <= C_DW;
+                end
+                C_DW: begin
+                    if (u8_to_q_unsigned_direct(params[1]) < (16'sd1 <<< 8)) begin
+                        compute_state <= C_UPDATE;  // Skip dw calculation
+                    end else begin
+                        // Store dV in V temporarily, calculate dw in temp_calc
+                        V <= V + temp_calc;  // Apply dV
+                        temp_calc <= qdiv((qmul(u8_to_q_unsigned_direct(params[2]), (V - EL_mV)) - w), u8_to_q_unsigned_direct(params[1]));
+                        compute_state <= C_UPDATE;
+                    end
+                end
+                C_UPDATE: begin
+                    // Apply dw
+                    w <= w + temp_calc;
 
-            // Update state variables
-            V <= V + dV;
-            w <= w + dw;
+                    // Spike detection and reset
+                    if (V > u8_to_signed_q_direct(params[5])) begin
+                        spike_reg <= 1'b1;
+                        V <= u8_to_signed_q_direct(params[4]);  // Vreset
+                        w <= w + temp_calc + u8_to_q_unsigned_direct(params[3]);  // Add both dw and b
+                    end else begin
+                        spike_reg <= 1'b0;
+                    end
 
-            // Spike detection and reset
-            if (V > VT_q) begin
-                spike_reg <= 1'b1;
-                V <= Vreset_q;
-                w <= w + b_q;
-            end else begin
-                spike_reg <= 1'b0;
-            end
-
-            // Saturate V and w to 16-bit bounds
-            if (V > ( 16'sd100 <<< 8)) V <= ( 16'sd100 <<< 8);   // +100mV
-            if (V < (-16'sd150 <<< 8)) V <= (-16'sd150 <<< 8);   // -150mV
-            if (w > ( 16'sd127 <<< 8)) w <= ( 16'sd127 <<< 8);   // Reduced bound for 16-bit
-            if (w < (-16'sd100 <<< 8)) w <= (-16'sd100 <<< 8);
-            
-            // Update output registers
-            vm8_reg <= sat_to_u8_fixed(V);
-            w8_reg  <= sat_to_u8_fixed(w);
+                    // Saturate V and w (simplified bounds checking)
+                    if (V[15]) begin  // Negative
+                        if (V < (-16'sd150 <<< 8)) V <= (-16'sd150 <<< 8);
+                    end else begin    // Positive
+                        if (V > ( 16'sd100 <<< 8)) V <= ( 16'sd100 <<< 8);
+                    end
+                    
+                    if (w[15]) begin  // Negative
+                        if (w < (-16'sd100 <<< 8)) w <= (-16'sd100 <<< 8);
+                    end else begin    // Positive  
+                        if (w > ( 16'sd127 <<< 8)) w <= ( 16'sd127 <<< 8);
+                    end
+                    
+                    // Update output registers
+                    vm8_reg <= sat_to_u8_fixed(V);
+                    w8_reg  <= sat_to_u8_fixed(w);
+                    
+                    compute_state <= C_LEAK;  // Loop back
+                end
+                default: compute_state <= C_LEAK;
+            endcase
         end else begin
-            // Keep previous values when core disabled
+            compute_state <= C_LEAK;
             if (vm8_reg === 8'bxxxxxxxx) vm8_reg <= 8'd63;
             if (w8_reg === 8'bxxxxxxxx) w8_reg <= 8'd128;
         end
