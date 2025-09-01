@@ -25,35 +25,35 @@ project:
 
 # The pinout of your project. Leave unused pins blank. DO NOT delete or add any pins.
 pinout:
-  # Inputs (ui_in[7:0])
-  ui[0]: "param_data[0]"     # Nibble loader bit 0
-  ui[1]: "param_data[1]"     # Nibble loader bit 1
-  ui[2]: "param_data[2]"     # Nibble loader bit 2
-  ui[3]: "param_data[3]"     # Nibble loader bit 3
-  ui[4]: "param_load"        # Strobe/load signal
-  ui[5]: "param_reset"       # Reset neuron state
-  ui[6]: "stim_enable"       # Enable constant input current
-  ui[7]: "stim_delta"        # Small bias to vary input current
+  # Inputs (ui_in[7:0]) - These are dedicated user inputs for controlling the core.
+  ui[0]: ""                  # Not used
+  ui[1]: "debug_mode"        # Set to 1 to output 'w' instead of 'V' on debug pins
+  ui[2]: "enable_core"       # Set to 1 to run the neuron simulation
+  ui[3]: "load_enable"       # Pulse high to load a 4-bit nibble from uio_in
+  ui[4]: "load_mode"         # Set to 1 to enable the parameter loader FSM
+  ui[5]: ""                  # Not used (harness uses a dedicated rst_n pin)
+  ui[6]: ""                  # Not used (harness uses a dedicated clk pin)
+  ui[7]: ""                  # Not used
 
-  # Outputs (uo_out[7:0])
-  uo[0]: "spike"             # 1 when Vm crosses threshold
-  uo[1]: "vmem[0]"           # Membrane potential LSB
-  uo[2]: "vmem[1]"
-  uo[3]: "vmem[2]"
-  uo[4]: "vmem[3]"
-  uo[5]: "w[0]"              # Adaptation current LSB
-  uo[6]: "w[1]"
-  uo[7]: "w[2]"              # MSB slice of adaptation current
+  # Outputs (uo_out[7:0]) - These are dedicated user outputs.
+  uo[0]: "spike"             # Pulses high for one cycle when the neuron fires
+  uo[1]: "debug_val[0]"      # 6-bit debug output LSB (top 6 bits of Vm or w)
+  uo[2]: "debug_val[1]"
+  uo[3]: "debug_val[2]"
+  uo[4]: "debug_val[3]"
+  uo[5]: "debug_val[4]"
+  uo[6]: "debug_val[5]"      # 6-bit debug output MSB (top 6 bits of Vm or w)
+  uo[7]: ""                  # Not used
 
-  # Bidirectional pins (uio[7:0])
-  uio[0]: "debug_mux[0]"     # Debug select bit 0
-  uio[1]: "debug_mux[1]"     # Debug select bit 1
-  uio[2]: "debug_out[0]"     # Debug output (when enabled)
-  uio[3]: "debug_out[1]"
-  uio[4]: ""                 # Spare
-  uio[5]: ""                 # Spare
-  uio[6]: ""                 # Spare
-  uio[7]: ""                 # Spare
+  # Bidirectional pins (uio[7:0]) - Used as inputs for parameter loading.
+  uio[0]: "param_nibble_in[0]" # LSB of 4-bit data for loader
+  uio[1]: "param_nibble_in[1]"
+  uio[2]: "param_nibble_in[2]"
+  uio[3]: "param_nibble_in[3]" # MSB of 4-bit data for loader
+  uio[4]: ""                  # Not used
+  uio[5]: ""                  # Not used
+  uio[6]: ""                  # Not used
+  uio[7]: ""                  # Not used
 
   # Analog pins - unused for digital-only neuron core
   ua[0]: ""
