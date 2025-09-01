@@ -19,6 +19,9 @@ module tt_um_dpi_adexp (
     input  wire       rst_n     // reset_n - low to reset
 );
 
+// List all unused inputs to prevent warnings
+wire _unused = &{ena, 1'b0};
+
 adex_neuron_system_tt_lut32 core (
     .clk(clk),
     .rst_n(rst_n),
