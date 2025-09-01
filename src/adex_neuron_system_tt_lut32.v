@@ -49,8 +49,9 @@ always @(posedge clk) begin
     if (reset) begin
         lstate <= L_IDLE; byte_acc <= 8'd0; nibble_cnt <= 1'b0;
         param_idx <= 4'd0; watchdog_cnt <= 12'd0; r_ready <= 1'b0;
-        params[0] <= 8'd130; params[1] <= 8'd228; params[2] <= 8'd130; params[3] <= 8'd168;
-        params[4] <= 8'd63;  params[5] <= 8'd78;  params[6] <= 8'd200; params[7] <= 8'd100;
+        // Default parameters that should produce spiking
+        params[0] <= 8'd130; params[1] <= 8'd100; params[2] <= 8'd1; params[3] <= 8'd5;
+        params[4] <= 8'd63;  params[5] <= 8'd78;  params[6] <= 8'd180; params[7] <= 8'd10;
     end else begin
         if (lstate != L_IDLE && watchdog_cnt < WATCHDOG_MAX) watchdog_cnt <= watchdog_cnt + 1'b1;
         else if (lstate != L_IDLE) begin lstate <= L_IDLE; nibble_cnt <= 1'b0; param_idx <= 4'd0; watchdog_cnt <= 12'd0; end
@@ -86,9 +87,9 @@ end
 reg signed [15:0] V, w, dV, dW, V_plus;
 reg spike_reg;
 reg [2:0] refrac_cnt;  // refractory period counter
-reg signed [15:0] exp_val;         // Missing signal declaration
-reg signed [15:0] exp_current;     // Missing signal declaration  
-reg signed [15:0] adaptation_term; // Missing signal declaration
+reg signed [15:0] exp_val;         // Exponential value
+reg signed [15:0] exp_current;     // Exponential current
+reg signed [15:0] adaptation_term; // Adaptation term
 
 localparam signed [15:0] gL_nS = 16'sd10 <<< 8;
 localparam signed [15:0] EL_mV = -16'sd70 <<< 8;
@@ -128,15 +129,6 @@ function signed [15:0] exp_q_enhanced(input signed [15:0] arg_in);
     exp_q_enhanced = val;
 endfunction
 
-// Improved parameter conversion with better scaling
-function signed [15:0] u8_to_signed_q_enhanced(input [7:0] x);
-    u8_to_signed_q_enhanced = ($signed({8'b0, x}) - 16'sd128) <<< 8;
-endfunction
-
-function signed [15:0] u8_to_q_unsigned_enhanced(input [7:0] x);
-    u8_to_q_unsigned_enhanced = $signed({8'b0, x}) <<< 8;
-endfunction
-
 // Enhanced multiply with better precision
 function signed [15:0] qmul_enhanced(input signed [15:0] a, input signed [15:0] b);
     reg signed [31:0] temp_mult;
@@ -158,6 +150,23 @@ function signed [15:0] qdiv_enhanced(input signed [15:0] a, input signed [15:0] 
     end
 endfunction
 
+// ---------------------- Helper Functions ----------------------
+function signed [15:0] u8_to_signed_q_direct(input [7:0] x);
+    u8_to_signed_q_direct = ($signed({8'b0, x}) - 16'sd128) <<< 8;
+endfunction
+
+function signed [15:0] u8_to_q_unsigned_direct(input [7:0] x);
+    u8_to_q_unsigned_direct = $signed({8'b0, x}) <<< 8;
+endfunction
+
+function [7:0] sat_to_u8_fixed(input signed [15:0] x);
+    reg signed [15:0] u; 
+    u = (x >>> 8) + 16'sd128; 
+    if(u < 0) u = 0; 
+    if(u > 255) u = 255; 
+    sat_to_u8_fixed = u[7:0];
+endfunction
+
 // ---------------------- Enhanced Compute FSM ----------------------
 reg [2:0] compute_state;
 localparam C_LEAK=0, C_ARG=1, C_EXP=2, C_DRIVE=3, C_DV=4, C_DW=5, C_UPDATE=6;
@@ -168,12 +177,17 @@ always @(posedge clk) begin
         w <= 16'sd0; 
         spike_reg <= 1'b0; 
         temp_calc <= 16'sd0;
+        exp_val <= 16'sd0;
+        exp_current <= 16'sd0;
+        adaptation_term <= 16'sd0;
+        leak_term <= 16'sd0;
+        exp_arg <= 16'sd0;
+        dV <= 16'sd0;
+        dW <= 16'sd0;
         refrac_cnt <= 3'd0;
         compute_state <= C_LEAK; 
         vm8_reg <= 8'd63; 
         w8_reg <= 8'd128;
-        params[0] <= 8'd130; params[1] <= 8'd100; params[2] <= 8'd1; params[3] <= 8'd5;
-        params[4] <= 8'd63;  params[5] <= 8'd78;  params[6] <= 8'd160; params[7] <= 8'd10;
     end else begin
         if(enable_core && refrac_cnt == 3'd0) begin
             case(compute_state)
@@ -246,31 +260,6 @@ always @(posedge clk) begin
         end
     end
 end
-
-// ---------------------- Helper Functions ----------------------
-function signed [15:0] qmul(input signed [15:0] a, input signed [15:0] b);
-    qmul = (a*b) >>> 8;
-endfunction
-
-function signed [15:0] qdiv(input signed [15:0] a, input signed [15:0] b);
-    qdiv = b==0 ? 16'sd0 : (a <<< 8)/b;
-endfunction
-
-function signed [15:0] u8_to_signed_q_direct(input [7:0] x);
-    u8_to_signed_q_direct = ($signed({8'b0, x}) - 16'sd128) <<< 8;
-endfunction
-
-function signed [15:0] u8_to_q_unsigned_direct(input [7:0] x);
-    u8_to_q_unsigned_direct = $signed({8'b0, x}) <<< 8;
-endfunction
-
-function [7:0] sat_to_u8_fixed(input signed [15:0] x);
-    reg signed [15:0] u; 
-    u = (x >>> 8) + 16'sd128; 
-    if(u < 0) u = 0; 
-    if(u > 255) u = 255; 
-    sat_to_u8_fixed = u[7:0];
-endfunction
 
 // Output assignment
 always @(*) begin
