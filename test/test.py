@@ -3,41 +3,90 @@
 
 import cocotb
 from cocotb.clock import Clock
-from cocotb.triggers import ClockCycles
+from cocotb.triggers import ClockCycles, RisingEdge, FallingEdge
 
+# Helper function to load a single 4-bit nibble into the DUT
+async def load_nibble(dut, nibble):
+    """Drives the uio_in bus and pulses load_enable for one clock cycle."""
+    dut.uio_in.value = nibble
+    await RisingEdge(dut.clk)
+    dut.ui_in.value |= (1 << 3) # Assert load_enable
+    await RisingEdge(dut.clk)
+    dut.ui_in.value &= ~(1 << 3) # De-assert load_enable
+    await FallingEdge(dut.clk) # Wait for signals to settle
 
 @cocotb.test()
-async def test_project(dut):
+async def test_neuron_spike(dut):
+    """
+    Tests the AdEx neuron by loading a positive input current (Ibias)
+    and waiting for it to spike.
+    """
     dut._log.info("Start")
+
+    # Define control bit positions from the Verilog code
+    LOAD_MODE   = 1 << 4
+    LOAD_ENABLE = 1 << 3
+    ENABLE_CORE = 1 << 2
+    DEBUG_MODE  = 1 << 1
 
     # Set the clock period to 10 us (100 KHz)
     clock = Clock(dut.clk, 10, units="us")
     cocotb.start_soon(clock.start())
 
-    # Reset
-    dut._log.info("Reset")
+    # --- Reset Sequence ---
+    dut._log.info("Resetting DUT")
     dut.ena.value = 1
     dut.ui_in.value = 0
     dut.uio_in.value = 0
     dut.rst_n.value = 0
     await ClockCycles(dut.clk, 10)
     dut.rst_n.value = 1
+    dut._log.info("Reset complete")
 
-    dut._log.info("Applying stimulus")
+    # --- Parameter Loading Sequence ---
+    # We will load a positive Ibias to make the neuron spike.
+    # Ibias is the 7th parameter (index 6).
+    # Value to load: 150 (0x96), which is 150-128=22mV, a positive current.
+    dut._log.info("Loading Ibias parameter...")
+    
+    # 1. Enter load mode and pulse load_enable to start the loader FSM
+    dut.ui_in.value = LOAD_MODE
+    await load_nibble(dut, 0)
 
-    # Set the input values you want to test
-    dut.ui_in.value = 20
-    dut.uio_in.value = 30
+    # 2. Load dummy values for the first 6 parameters (12 nibbles)
+    dut._log.info("Loading 6 dummy parameters...")
+    for i in range(12):
+        await load_nibble(dut, 0)
 
-    # Wait for one clock cycle to see the output values
-    await ClockCycles(dut.clk, 1)
+    # 3. Load the Ibias value (0x96 = nibbles 9 and 6)
+    dut._log.info("Loading Ibias = 150 (0x96)...")
+    await load_nibble(dut, 0x9) # High nibble
+    await load_nibble(dut, 0x6) # Low nibble
 
-    # The following assersion is just an example of how to check the output values.
-    # Change it to match the actual expected output of your module:
-    assert dut.uo_out.value.integer & 0x7F >= 20, f"uo_out should be >= 20, got {dut.uo_out.value.integer & 0x7F}"
-    assert dut.uio_out.value.integer & 0x7F >= 30, f"uio_out should be >= 30, got {dut.uio_out.value.integer & 0x7F}"
-    dut._log.info("Output values are as expected")
-    # You can add more test cases here
+    # 4. Load the footer nibble (0xF) to commit parameters
+    dut._log.info("Loading footer to commit...")
+    await load_nibble(dut, 0xF)
+    
+    # 5. Exit load mode
+    dut.ui_in.value = 0
+    await ClockCycles(dut.clk, 2)
+    dut._log.info("Parameter loading complete.")
 
-    # Keep testing the module by changing the input values, waiting for
-    # one or more clock cycles, and asserting the expected output values.
+    # --- Run and Wait for Spike ---
+    dut._log.info("Enabling core and waiting for a spike...")
+    dut.ui_in.value = ENABLE_CORE
+
+    spike_detected = False
+    max_cycles = 1000  # Max time to wait for a spike
+
+    for i in range(max_cycles):
+        await RisingEdge(dut.clk)
+        # uo_out[0] is the spike indicator
+        if dut.uo_out.value[0] == 1:
+            dut._log.info(f"Spike detected on cycle {i+1}!")
+            spike_detected = True
+            break
+    
+    # Assert that a spike was actually detected
+    assert spike_detected, f"Neuron did not spike within {max_cycles} cycles."
+    dut._log.info("Test completed successfully.")
