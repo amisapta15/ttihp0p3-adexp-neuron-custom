@@ -215,19 +215,21 @@ function signed [15:0] exp_q;
     end
 endfunction
 
+// For signed parameters (Ibias, DeltaT, Vreset, VT)
 function signed [15:0] u8_to_signed_q_mid;
     input [7:0] x;
     reg signed [15:0] tmp;
     begin
-        tmp = $signed({8'b0, x}) - 16'sd128;
-        u8_to_signed_q_mid = tmp <<< 12;
+        tmp = ($signed({8'b0, x}) - 16'sd128) * 16; // Scale to Q4.12 range
+        u8_to_signed_q_mid = tmp;
     end
 endfunction
 
+// For unsigned parameters (C, TauW, a, b)
 function signed [15:0] u8_to_q_unsigned;
     input [7:0] x;
     begin
-        u8_to_q_unsigned = $signed({8'b0, x}) <<< 12;
+        u8_to_q_unsigned = $signed({8'b0, x}) * 16; // Scale to Q4.12 range
     end
 endfunction
 
