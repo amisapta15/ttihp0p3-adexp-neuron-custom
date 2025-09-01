@@ -1,4 +1,4 @@
-// Optimized 16-bit adex_neuron_system_tt_lut32.v
+// Area-optimized 12-bit adex_neuron_system_tt_lut32.v
 module adex_neuron_system_tt_lut32 (
     input             clk,
     input             rst_n,
@@ -90,50 +90,51 @@ always @(posedge clk) begin
     end
 end
 
-// ---------------------- 16-bit Core Neuron Logic ----------------------
-// Changed from 32-bit to 16-bit arithmetic with Q4.8 format (4 integer, 8 fractional bits)
-reg signed [15:0] V, w;
+// ---------------------- 12-bit Core Neuron Logic ----------------------
+// Reduced from 16-bit to 12-bit arithmetic with Q4.6 format (4 integer, 6 fractional bits)
+reg signed [11:0] V, w;
 reg spike_reg;
-reg signed [15:0] DeltaT_q, TauW_q, a_q, b_q, Vreset_q, VT_q, Ibias_q, C_q;
+reg signed [11:0] DeltaT_q, TauW_q, a_q, b_q, Vreset_q, VT_q, Ibias_q, C_q;
 
-// Fixed constants in Q4.8 format
-localparam signed [15:0] gL_nS = (16'sd10)  <<< 8;      // 10 * 2^8
-localparam signed [15:0] EL_mV = (-16'sd70) <<< 8;      // -70 * 2^8
+// Fixed constants in Q4.6 format
+localparam signed [11:0] gL_nS = (12'sd10)  << 6;      // 10 * 2^6
+localparam signed [11:0] EL_mV = (-12'sd70) << 6;      // -70 * 2^6
 
-// Reduced intermediate registers to 16-bit
-reg signed [15:0] leak, arg, expterm, drive, dV, dw;
+// Reduced intermediate registers to 12-bit (major area savings)
+reg signed [11:0] leak, expterm, drive;
+reg signed [11:0] dV, dw, arg;
 reg [7:0] vm8_reg, w8_reg;
 
-// 16-bit Q arithmetic helpers with Q4.8 format
-function signed [15:0] qmul;
-    input signed [15:0] a, b;
-    reg signed [31:0] temp;
+// 12-bit Q arithmetic helpers with Q4.6 format
+function signed [11:0] qmul;
+    input signed [11:0] a, b;
+    reg signed [23:0] temp;
     begin
         temp = $signed(a) * $signed(b);
-        qmul = temp >>> 8;  // Shift by 8 instead of 12
+        qmul = temp >>> 6;  // Shift by 6 for Q4.6
     end
 endfunction
 
-function signed [15:0] qdiv;
-    input signed [15:0] a, b;
-    reg signed [31:0] temp;
+function signed [11:0] qdiv;
+    input signed [11:0] a, b;
+    reg signed [23:0] temp;
     begin
-        if (b == 0) qdiv = 16'sd0;
+        if (b == 0) qdiv = 12'sd0;
         else begin
-            temp = ($signed(a) <<< 8);  // Shift by 8 instead of 12
+            temp = ($signed(a) << 6);  // Shift by 6 for Q4.6
             qdiv = temp / $signed(b);
         end
     end
 endfunction
 
-// Optimized exponential function - still 32 entries but with 16-bit output
-function signed [15:0] exp_q;
-    input signed [15:0] arg_in;
-    integer idx; reg signed [15:0] val;
-    reg signed [15:0] RANGE_MIN, RANGE_MAX;
-    reg signed [31:0] temp_calc, range_diff;
+// Optimized exponential function - 32 entries with 12-bit output
+function signed [11:0] exp_q;
+    input signed [11:0] arg_in;
+    integer idx; reg signed [11:0] val;
+    reg signed [11:0] RANGE_MIN, RANGE_MAX;
+    reg signed [23:0] temp_calc, range_diff;
     begin
-        RANGE_MIN = (-16'sd4)<<<8; RANGE_MAX = (16'sd4)<<<8;  // Q4.8 format
+        RANGE_MIN = (-12'sd4)<<6; RANGE_MAX = (12'sd4)<<6;  // Q4.6 format
         if(arg_in < RANGE_MIN) idx = 0;
         else if(arg_in > RANGE_MAX) idx = 31;
         else begin
@@ -143,71 +144,71 @@ function signed [15:0] exp_q;
             if (idx > 31) idx = 31;
             if (idx < 0) idx = 0;
         end
-        // Exponential LUT values scaled for 16-bit Q4.8 format
+        // Exponential LUT values scaled for 12-bit Q4.6 format
         case(idx)
-            0: val=18;   1: val=25;   2: val=33;   3: val=45;
-            4: val=61;   5: val=82;   6: val=111;  7: val=150;
-            8: val=203;  9: val=275;  10: val=372; 11: val=503;
-           12: val=681; 13: val=921; 14: val=1245;15: val=1684;
-           16: val=2279;17: val=3084;18: val=4171;19: val=5644;
-           20: val=7634;21: val=10332;22: val=13975;23: val=18906;
-           24: val=25575;25: val=32767;26: val=32767;27: val=32767; // Saturate to prevent overflow
-           28: val=32767;29: val=32767;30: val=32767;31: val=32767;
-           default: val = 32767;
+            0: val=1;    1: val=2;    2: val=2;    3: val=3;
+            4: val=4;    5: val=5;    6: val=7;    7: val=9;
+            8: val=13;   9: val=17;   10: val=23;  11: val=31;
+           12: val=43;   13: val=58;  14: val=78;  15: val=105;
+           16: val=142;  17: val=193; 18: val=261; 19: val=353;
+           20: val=478;  21: val=647; 22: val=875; 23: val=1184;
+           24: val=1602; 25: val=2047;26: val=2047;27: val=2047; // Saturate at 12-bit max
+           28: val=2047; 29: val=2047;30: val=2047;31: val=2047;
+           default: val = 2047;
         endcase
-        exp_q = val; // Values already appropriately scaled for Q4.8
+        exp_q = val;
     end
 endfunction
 
-// 16-bit converters with Q4.8 format
-function signed [15:0] u8_to_signed_q_direct;
+// 12-bit converters with Q4.6 format
+function signed [11:0] u8_to_signed_q_direct;
     input [7:0] x;
     begin
-        u8_to_signed_q_direct = ($signed({8'b0, x}) - 16'sd128) <<< 8;  // Q4.8 format
+        u8_to_signed_q_direct = ($signed({4'b0, x}) - 12'sd128) << 6;  // Q4.6 format
     end
 endfunction
 
-function signed [15:0] u8_to_q_unsigned_direct;
+function signed [11:0] u8_to_q_unsigned_direct;
     input [7:0] x;
     begin
-        u8_to_q_unsigned_direct = $signed({8'b0, x}) <<< 8;  // Q4.8 format
+        u8_to_q_unsigned_direct = $signed({4'b0, x}) << 6;  // Q4.6 format
     end
 endfunction
 
 function [7:0] sat_to_u8_fixed;
-    input signed [15:0] x;
-    reg signed [15:0] u;
+    input signed [11:0] x;
+    reg signed [11:0] u;
     begin
-        u = (x >>> 8) + 16'sd128;  // Convert from Q4.8 and add offset
+        u = (x >>> 6) + 12'sd128;  // Convert from Q4.6 and add offset
         if (u < 0) u = 0;
         if (u > 255) u = 255;
         sat_to_u8_fixed = u[7:0];
     end
 endfunction
 
+// State machine for neuron computation (reduces combinational logic)
+reg [1:0] comp_state;
+localparam C_LEAK=0, C_EXP=1, C_UPDATE=2, C_SPIKE=3;
+
 always @(posedge clk) begin
     if (reset) begin
-        // Initialize with 16-bit values in Q4.8 format
-        V <= (-16'sd65) <<< 8;  // Start at -65mV in Q4.8
-        w <= 16'sd0; 
+        // Initialize with 12-bit values in Q4.6 format
+        V <= (-12'sd65) << 6;  // Start at -65mV in Q4.6
+        w <= 12'sd0; 
         spike_reg <= 1'b0;
-        leak <= 16'sd0;
-        arg <= 16'sd0;
-        expterm <= 16'sd0;
-        drive <= 16'sd0;
-        dV <= 16'sd0;
-        dw <= 16'sd0;
-        vm8_reg <= 8'd63;
-        w8_reg <= 8'd128;
-        // Default parameters in Q4.8 format
-        DeltaT_q <= (16'sd2) <<< 8;      // 2mV
-        TauW_q <= (16'sd100) <<< 8;      // 100ms
-        a_q <= (16'sd2) <<< 8;           // 2nS
-        b_q <= (16'sd40) <<< 8;          // 40pA
-        Vreset_q <= (-16'sd65) <<< 8;    // -65mV
-        VT_q <= (-16'sd50) <<< 8;        // -50mV
-        Ibias_q <= (16'sd15) <<< 8;      // 15pA
-        C_q <= (16'sd200) <<< 8;         // 200pF
+        leak <= 12'sd0; expterm <= 12'sd0; drive <= 12'sd0;
+        dV <= 12'sd0; dw <= 12'sd0; arg <= 12'sd0;
+        vm8_reg <= 8'd63; w8_reg <= 8'd128;
+        comp_state <= C_LEAK;
+        // Default parameters in Q4.6 format
+        DeltaT_q <= (12'sd2) << 6;      // 2mV
+        TauW_q <= (12'sd100) << 6;      // 100ms
+        a_q <= (12'sd2) << 6;           // 2nS
+        b_q <= (12'sd40) << 6;          // 40pA
+        Vreset_q <= (-12'sd65) << 6;    // -65mV
+        VT_q <= (-12'sd50) << 6;        // -50mV
+        Ibias_q <= (12'sd15) << 6;      // 15pA
+        C_q <= (12'sd200) << 6;         // 200pF
     end else begin
         if (params_ready) begin
             DeltaT_q <= u8_to_signed_q_direct(p_DeltaT); 
@@ -221,61 +222,76 @@ always @(posedge clk) begin
         end
 
         if (enable_core) begin
-            // Calculate leak current
-            leak <= qmul(gL_nS, (EL_mV - V));
-            
-            // Calculate exponential term with protection
-            if (DeltaT_q == 0) begin
-                arg <= 16'sd0;
-                expterm <= 16'sd0;
-            end else begin
-                arg <= qdiv((V - VT_q), DeltaT_q);
-                expterm <= qmul(gL_nS, qmul(DeltaT_q, exp_q(arg)));
-            end
-            
-            // Total drive current
-            drive <= leak + expterm - w + Ibias_q;
-            
-            // Calculate dV with minimum capacitance protection
-            if (C_q < (16'sd10 <<< 8)) begin  // Minimum 10pF in Q4.8
-                dV <= qdiv(drive, (16'sd10 <<< 8));
-            end else begin
-                dV <= qdiv(drive, C_q);
-            end
-            
-            // Calculate dw with protection
-            if (TauW_q < (16'sd1 <<< 8)) begin  // Minimum 1ms in Q4.8
-                dw <= 16'sd0;
-            end else begin
-                dw <= qdiv((qmul(a_q, (V - EL_mV)) - w), TauW_q);
-            end
+            // Pipeline the computation across multiple cycles (reduces comb logic)
+            case (comp_state)
+                C_LEAK: begin
+                    // Calculate leak current
+                    leak <= qmul(gL_nS, (EL_mV - V));
+                    comp_state <= C_EXP;
+                end
+                C_EXP: begin
+                    // Calculate exponential term
+                    if (DeltaT_q == 0) begin
+                        arg <= 12'sd0;
+                        expterm <= 12'sd0;
+                    end else begin
+                        arg <= qdiv((V - VT_q), DeltaT_q);
+                        expterm <= qmul(gL_nS, qmul(DeltaT_q, exp_q(arg)));
+                    end
+                    comp_state <= C_UPDATE;
+                end
+                C_UPDATE: begin
+                    // Total drive current and derivatives
+                    drive <= leak + expterm - w + Ibias_q;
+                    
+                    // Calculate dV with minimum capacitance protection
+                    if (C_q < (12'sd10 << 6)) begin  // Minimum 10pF in Q4.6
+                        dV <= qdiv(drive, (12'sd10 << 6));
+                    end else begin
+                        dV <= qdiv(drive, C_q);
+                    end
+                    
+                    // Calculate dw with protection
+                    if (TauW_q < (12'sd1 << 6)) begin  // Minimum 1ms in Q4.6
+                        dw <= 12'sd0;
+                    end else begin
+                        dw <= qdiv((qmul(a_q, (V - EL_mV)) - w), TauW_q);
+                    end
+                    
+                    comp_state <= C_SPIKE;
+                end
+                C_SPIKE: begin
+                    // Update state variables
+                    V <= V + dV;
+                    w <= w + dw;
 
-            // Update state variables
-            V <= V + dV;
-            w <= w + dw;
+                    // Spike detection and reset
+                    if (V > VT_q) begin
+                        spike_reg <= 1'b1;
+                        V <= Vreset_q;
+                        w <= w + b_q;
+                    end else begin
+                        spike_reg <= 1'b0;
+                    end
 
-            // Spike detection and reset
-            if (V > VT_q) begin
-                spike_reg <= 1'b1;
-                V <= Vreset_q;
-                w <= w + b_q;
-            end else begin
-                spike_reg <= 1'b0;
-            end
-
-            // Saturate V and w to 16-bit bounds
-            if (V > ( 16'sd100 <<< 8)) V <= ( 16'sd100 <<< 8);   // +100mV
-            if (V < (-16'sd150 <<< 8)) V <= (-16'sd150 <<< 8);   // -150mV
-            if (w > ( 16'sd127 <<< 8)) w <= ( 16'sd127 <<< 8);   // Reduced bound for 16-bit
-            if (w < (-16'sd100 <<< 8)) w <= (-16'sd100 <<< 8);
-            
-            // Update output registers
-            vm8_reg <= sat_to_u8_fixed(V);
-            w8_reg  <= sat_to_u8_fixed(w);
+                    // Saturate V and w to 12-bit bounds
+                    if (V > ( 12'sd100 << 6)) V <= ( 12'sd100 << 6);   // +100mV
+                    if (V < (-12'sd150 << 6)) V <= (-12'sd150 << 6);   // -150mV
+                    if (w > ( 12'sd127 << 6)) w <= ( 12'sd127 << 6);   
+                    if (w < (-12'sd100 << 6)) w <= (-12'sd100 << 6);
+                    
+                    // Update output registers
+                    vm8_reg <= sat_to_u8_fixed(V);
+                    w8_reg  <= sat_to_u8_fixed(w);
+                    
+                    comp_state <= C_LEAK;
+                end
+            endcase
         end else begin
             // Keep previous values when core disabled
             if (vm8_reg === 8'bxxxxxxxx) vm8_reg <= 8'd63;
             if (w8_reg === 8'bxxxxxxxx) w8_reg <= 8'd128;
+            comp_state <= C_LEAK;
         end
     end
 end
