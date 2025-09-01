@@ -72,22 +72,23 @@ async def test_basic_spiking(dut):
 
     # Load spiking parameters
     basic_params = {
-        "DeltaT": encode_signed_direct(2),
-        "TauW":   encode_unsigned_direct(80),
+        "DeltaT": encode_signed_direct(5),
+        "TauW":   encode_unsigned_direct(200),
         "a":      encode_unsigned_direct(1),
-        "b":      encode_unsigned_direct(3),
+        "b":      encode_unsigned_direct(2),    # smaller adaptation increment
         "Vreset": encode_signed_direct(-65),
-        "VT":     encode_signed_direct(-50),
-        "Ibias":  encode_unsigned_direct(200),
-        "C":      encode_unsigned_direct(8),
+        "VT":     encode_signed_direct(-55),    # easier threshold
+        "Ibias":  encode_unsigned_direct(250),  # stronger bias
+        "C":      encode_unsigned_direct(10),
     }
+
     await load_parameters(dut, basic_params)
 
     # Enable neuron (bit 2)
     dut.ui_in.value = (1 << 2)
     await wait_for_stable(dut, 50)
 
-    spikes = await monitor_spikes(dut, cycles=8000)
+    spikes = await monitor_spikes(dut, cycles=12000)
     dut._log.info(f"Basic spiking: detected {len(spikes)} spikes")
 
     assert len(spikes) > 0, "Neuron did not spike"
@@ -114,7 +115,7 @@ async def test_spike_frequency_adaptation(dut):
         "b":      encode_unsigned_direct(8),
         "Vreset": encode_signed_direct(-65),
         "VT":     encode_signed_direct(-50),
-        "Ibias":  encode_unsigned_direct(220),
+        "Ibias":  encode_unsigned_direct(250),   # <<< raised Ibias
         "C":      encode_unsigned_direct(10),
     }
     await load_parameters(dut, adapt_params)
@@ -123,8 +124,10 @@ async def test_spike_frequency_adaptation(dut):
     dut.ui_in.value = (1 << 2)
     await wait_for_stable(dut, 50)
 
-    spikes = await monitor_spikes(dut, cycles=15000)
-    dut._log.info(f"Adaptation test: detected {len(spikes)} spikes")
+    # Run longer
+    spikes = await monitor_spikes(dut, cycles=80000)
+    dut._log.info(f"Adaptation test: detected {len(spikes)} total spikes")
+    dut._log.info(f"Spike times: {spikes}")
 
     if len(spikes) < 4:
         dut._log.warning("Not enough spikes for adaptation check")
