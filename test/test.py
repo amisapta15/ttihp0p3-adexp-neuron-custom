@@ -1,101 +1,129 @@
-# SPDX-FileCopyrightText: © 2024 Tiny Tapeout
-# SPDX-License-Identifier: Apache-2.0
-
 import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import ClockCycles, RisingEdge, FallingEdge
 
-# Helper function to load a single 4-bit nibble into the DUT
-async def load_nibble(dut, nibble):
-    """Drives the uio_in bus and pulses load_enable for one clock cycle."""
-    dut.uio_in.value = nibble
-    await RisingEdge(dut.clk)
-    dut.ui_in.value |= (1 << 3) # Assert load_enable
-    await RisingEdge(dut.clk)
-    dut.ui_in.value &= ~(1 << 3) # De-assert load_enable
-    await FallingEdge(dut.clk) # Wait for signals to settle
+# ---------------- Helpers ----------------
+def encode_signed(real_value):
+    """Encodes a real-world signed value into 8-bit hardware format (offset +128).
+       Clamps to [0,255]."""
+    v = int(round(real_value + 128))
+    if v < 0: v = 0
+    if v > 255: v = 255
+    return v
 
+def encode_unsigned(real_value):
+    """Encodes an unsigned value into 8-bit hardware format. Clamps to [0,255]."""
+    v = int(round(real_value))
+    if v < 0: v = 0
+    if v > 255: v = 255
+    return v
+
+async def load_nibble(dut, nibble, param_name="", load_mode_mask=(1 << 4), use_load_mode=True):
+    """
+    Drive uio_in (low 4 bits) and assert load_enable (ui_in[3]) simultaneously,
+    then wait one rising edge so the DUT samples them on that posedge.
+    This is robust and easy to reason about.
+    """
+    # prepare integer versions
+    ui_int = int(dut.ui_in.value)
+    # drive nibble on uio_in (careful: uio_in is 8-bit bus, put nibble in [3:0])
+    dut.uio_in.value = int(nibble) & 0xF
+
+    # assert load_mode if requested (keeps prior load_mode bit)
+    if use_load_mode:
+        ui_int = ui_int | load_mode_mask
+    # assert load_enable (bit 3)
+    ui_int = ui_int | (1 << 3)
+
+    dut.ui_in.value = ui_int
+    await RisingEdge(dut.clk)
+
+    # de-assert load_enable (but keep load_mode if requested)
+    ui_int = int(dut.ui_in.value)
+    ui_int = ui_int & ~(1 << 3)
+    dut.ui_in.value = ui_int
+
+    # give one falling edge to let things settle (optional)
+    await FallingEdge(dut.clk)
+
+async def load_parameters(dut, params):
+    """Loads parameters into the DUT using the nibble FSM."""
+    dut._log.info("Beginning parameter loading...")
+
+    LOAD_MODE = 1 << 4
+    param_order = ["DeltaT", "TauW", "a", "b", "Vreset", "VT", "Ibias", "C"]
+
+    # 1) enter load mode (keep load_mode asserted while loading)
+    dut.ui_in.value = LOAD_MODE
+    await RisingEdge(dut.clk)
+
+    # 2) load each parameter (two nibbles)
+    for name in param_order:
+        val = params.get(name, 0) & 0xFF
+        hi = (val >> 4) & 0xF
+        lo = val & 0xF
+        await load_nibble(dut, hi, name, load_mode_mask=LOAD_MODE, use_load_mode=True)
+        await load_nibble(dut, lo, name, load_mode_mask=LOAD_MODE, use_load_mode=True)
+
+    # 3) footer nibble 0xF to commit
+    await load_nibble(dut, 0xF, "Footer", load_mode_mask=LOAD_MODE, use_load_mode=True)
+
+    # 4) exit load mode (deassert load_mode) and wait a couple cycles
+    dut.ui_in.value = 0
+    await ClockCycles(dut.clk, 2)
+    dut._log.info("Parameter loading complete.")
+
+# ---------------- Main Test ----------------
 @cocotb.test()
 async def test_neuron_spike(dut):
-    """
-    Tests the AdEx neuron by loading appropriate parameter values
-    and waiting for it to spike.
-    """
-    dut._log.info("Start")
+    dut._log.info("Start test_neuron_spike")
 
-    # Define control bit positions from the Verilog code
-    LOAD_MODE   = 1 << 4
     ENABLE_CORE = 1 << 2
-
-    # Set the clock period to 10 us (100 KHz)
     clock = Clock(dut.clk, 10, units="us")
     cocotb.start_soon(clock.start())
 
-    # --- Reset Sequence ---
+    # Reset
     dut._log.info("Resetting DUT")
-    dut.ena.value = 1
+    # ensure clean default
     dut.ui_in.value = 0
     dut.uio_in.value = 0
     dut.rst_n.value = 0
     await ClockCycles(dut.clk, 10)
     dut.rst_n.value = 1
+    await ClockCycles(dut.clk, 2)
     dut._log.info("Reset complete")
 
-    # --- Parameter Loading Sequence ---
-    # We'll use more appropriate parameter values
-    dut._log.info("Beginning parameter loading...")
-    
-    # 1. Enter load mode and pulse load_enable to start the loader FSM
-    dut.ui_in.value = LOAD_MODE
-    await load_nibble(dut, 0) # This first pulse is just to enter the SHIFT state.
+    # Parameters that should produce spiking
+    params_to_load = {
+        "DeltaT": encode_signed(2),       # 2 -> 130
+        "TauW":   encode_unsigned(100),
+        "a":      encode_unsigned(2),
+        "b":      encode_unsigned(40),
+        "Vreset": encode_signed(-65),     # -65 -> 63
+        "VT":     encode_signed(-50),     # -50 -> 78
+        "Ibias":  encode_signed(72),      # 72 -> 200
+        "C":      encode_unsigned(200)
+    }
 
-    # 2. Load appropriate values for all 8 parameters
-    # Parameter order: DeltaT, TauW, a, b, Vreset, VT, Ibias, C
-    parameter_values = [
-        0x82,  # DeltaT: 130 (appropriate value)
-        0x64,  # TauW: 100 (appropriate value)
-        0x02,  # a: 2 (appropriate value)
-        0x28,  # b: 40 (appropriate value)
-        0x3F,  # Vreset: 63 (appropriate value)
-        0x4E,  # VT: 78 (appropriate value)
-        0x90,  # Ibias: 144 (moderate positive current)
-        0xC8   # C: 200 (default capacitance value)
-    ]
+    await load_parameters(dut, params_to_load)
 
-    # Load all parameters
-    for param_value in parameter_values:
-        high_nibble = (param_value >> 4) & 0xF
-        low_nibble = param_value & 0xF
-        
-        await load_nibble(dut, high_nibble)
-        await load_nibble(dut, low_nibble)
-
-    # 5. Load the footer nibble (0xF) to commit all parameters
-    dut._log.info("Loading footer to commit...")
-    await load_nibble(dut, 0xF)
-    
-    # 6. Exit load mode
-    dut.ui_in.value = 0
-    await ClockCycles(dut.clk, 2)
-    dut._log.info("Parameter loading complete.")
-
-    # --- Run and Wait for Spike ---
-    dut._log.info("Enabling core and waiting for a spike...")
+    # Enable core
+    dut._log.info("Enabling core and waiting for spike...")
     dut.ui_in.value = ENABLE_CORE
 
     spike_detected = False
-    max_cycles = 5000  # Increased max cycles to allow more time for spiking
+    max_cycles = 5000
 
     for i in range(max_cycles):
         await RisingEdge(dut.clk)
-        # uo_out[0] is the spike indicator
-        if dut.uo_out.value[0] == 1:
-            dut._log.info(f"Spike detected on cycle {i+1}!")
+        # read spike bit 0 in a robust way:
+        if (int(dut.uo_out.value) & 1) != 0:
+            dut._log.info(f"Spike detected on cycle {i+1}")
             spike_detected = True
             break
-    
-    # Assert that a spike was actually detected
-    assert spike_detected, f"Neuron did not spike within {max_cycles} cycles."
+
+    assert spike_detected, f"Neuron did NOT spike within {max_cycles} cycles."
+
 
 # # SPDX-FileCopyrightText: © 2024 Tiny Tapeout
 # # SPDX-License-Identifier: Apache-2.0
