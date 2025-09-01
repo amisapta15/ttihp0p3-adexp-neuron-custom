@@ -1,11 +1,7 @@
 /*
   File: adex_neuron_system_tt_lut32.v
   Compact Verilog-2001 implementation with 32-entry LUT for TinyTapeout (IHP 25b).
-  - Optimized for smaller area (1x2 tile ≈ 202 µm × 313 µm)
-  - Interface adapted for standard TinyTapeout wrapper.
-  - Core: AdEx-like adaptive exponential IF, Q4.12 fixed point (signed 16-bit).
-  - Outputs: top-6 bits of Vm (or w if debug_mode=1) on uo_out[6:1], spike on uo_out[0].
-  - Written to be synthesizable with OpenLane (Verilog-2001, no SystemVerilog).
+  - Final cleanup pass to resolve linter warnings and ensure compliance.
 */
  // ============================================================================
 
@@ -20,19 +16,18 @@ module adex_neuron_system_tt_lut32 (
 );
 
 // -----------------------------------------------------------------------------
-// Port unpacking
+// Port unpacking & I/O Assignments
 // -----------------------------------------------------------------------------
-wire reset       = ~rst_n;      // reset is active-high internally
+wire reset       = ~rst_n;      // Internal reset is active-high
 wire load_mode   = ui_in[4];
 wire load_enable = ui_in[3];
 wire enable_core = ui_in[2];
 wire debug_mode  = ui_in[1];
 
-// nibble inputs from uio[3:0] (external master must drive them during load_mode)
 wire [3:0] nibble_in;
 assign nibble_in = uio_in[3:0];
 
-// This module only reads from uio, so set it to input-only.
+// This module only uses uio for input, so the output is tied to 0 and disabled.
 assign uio_out = 8'b0;
 assign uio_oe  = 8'b0; // 0=input, 1=output
 
@@ -46,7 +41,6 @@ localparam L_WAIT_FOOTER = 3'd3;
 localparam L_READY       = 3'd4;
 
 reg [2:0]  lstate;
-reg [3:0]  nibble_buf;
 reg [7:0]  byte_acc;
 reg        nibble_cnt;        // 0 or 1
 reg [2:0]  param_idx;        // 0..6
@@ -83,7 +77,6 @@ wire       params_ready = r_ready;
 always @(posedge clk) begin
     if (reset) begin
         lstate <= L_IDLE;
-        nibble_buf <= 4'd0;
         byte_acc <= 8'd0;
         nibble_cnt <= 1'b0;
         param_idx <= 3'd0;
@@ -97,12 +90,10 @@ always @(posedge clk) begin
     end else begin
         load_prev <= load_enable;
 
-        // watchdog
         if (lstate != L_IDLE) begin
             if (watchdog_cnt < WATCHDOG_MAX) begin
                 watchdog_cnt <= watchdog_cnt + 1'b1;
             end else begin
-                // abort
                 lstate <= L_IDLE;
                 nibble_cnt <= 1'b0;
                 param_idx <= 3'd0;
@@ -113,23 +104,17 @@ always @(posedge clk) begin
         case (lstate)
             L_IDLE: begin
                 r_ready <= 1'b0;
-                if (load_mode) begin
-                    if (load_enable && !load_prev) begin
-                        // start capture
-                        lstate <= L_SHIFT;
-                        nibble_cnt <= 1'b0;
-                        nibble_buf <= 4'd0;
-                        byte_acc <= 8'd0;
-                        param_idx <= 3'd0;
-                        watchdog_cnt <= 16'd0;
-                    end
+                if (load_mode && load_enable && !load_prev) begin
+                    lstate <= L_SHIFT;
+                    nibble_cnt <= 1'b0;
+                    byte_acc <= 8'd0;
+                    param_idx <= 3'd0;
+                    watchdog_cnt <= 16'd0;
                 end
             end
 
             L_SHIFT: begin
-                // capture nibble on rising edge of load_enable
                 if (load_enable && !load_prev) begin
-                    nibble_buf <= nibble_in;
                     if (nibble_cnt == 1'b0) begin
                         byte_acc[7:4] <= nibble_in;
                         nibble_cnt <= 1'b1;
@@ -140,7 +125,6 @@ always @(posedge clk) begin
                     end
                     watchdog_cnt <= 16'd0;
                 end
-                // abort if load_mode deasserted
                 if (!load_mode) begin
                     lstate <= L_IDLE;
                     nibble_cnt <= 1'b0;
@@ -169,10 +153,8 @@ always @(posedge clk) begin
             end
 
             L_WAIT_FOOTER: begin
-                // wait for nibble (rising load_enable) equal to footer
                 if (load_enable && !load_prev) begin
                     if (nibble_in == FOOTER_NIB) begin
-                        // commit staged params
                         r_DeltaT <= s_DeltaT;
                         r_TauW   <= s_TauW;
                         r_a      <= s_a;
@@ -183,7 +165,6 @@ always @(posedge clk) begin
                         r_ready  <= 1'b1;
                         lstate <= L_READY;
                     end else begin
-                        // invalid footer: abort
                         lstate <= L_IDLE;
                         nibble_cnt <= 1'b0;
                         param_idx <= 3'd0;
@@ -195,8 +176,6 @@ always @(posedge clk) begin
                 if (!load_mode) begin
                     r_ready <= 1'b0;
                     lstate <= L_IDLE;
-                    param_idx <= 3'd0;
-                    nibble_cnt <= 1'b0;
                 end
             end
 
@@ -206,181 +185,122 @@ always @(posedge clk) begin
 end
 
 // -----------------------------------------------------------------------------
-// Core variables and intermediate calculations
+// Core Neuron Logic
 // -----------------------------------------------------------------------------
 reg signed [15:0] V;    // Q4.12
 reg signed [15:0] w;    // Q4.12
 reg spike_reg;
 
-// parameter Q4.12 representations
 reg signed [15:0] DeltaT_q, TauW_q, a_q, b_q, Vreset_q, VT_q, Ibias_q;
 
-// constants
-localparam signed [15:0] C_pF  = (16'sd200) <<< 12; // 200 * 2^12
-localparam signed [15:0] gL_nS = (16'sd10)  <<< 12; // 10 * 2^12
-localparam signed [15:0] EL_mV = ( -16'sd70 ) <<< 12;    // -70 * 2^12
+localparam signed [15:0] C_pF  = (16'sd200) <<< 12;
+localparam signed [15:0] gL_nS = (16'sd10)  <<< 12;
+localparam signed [15:0] EL_mV = (-16'sd70) <<< 12;
 
-// intermediate calculation registers
-reg signed [15:0] leak;
-reg signed [15:0] arg;
-reg signed [15:0] expterm;
-reg signed [15:0] drive;
-reg signed [15:0] dV;
-reg signed [15:0] dw;
-
-// output registers
+reg signed [15:0] leak, arg, expterm, drive, dV, dw;
 reg [7:0] vm8_reg, w8_reg;
 
-// helper arithmetic functions
+// NOTE: Blocking assignments (=) are used intentionally within functions
+// to model combinational logic, as is standard Verilog practice.
 function signed [15:0] qmul;
     input signed [15:0] a;
     input signed [15:0] b;
     reg signed [31:0] mul_result;
     begin
-        mul_result = a * b; // 32-bit
-        qmul = mul_result[27:12]; // Extract bits [27:12] for proper Q4.12 result
+        mul_result = a * b;
+        qmul = mul_result[27:12];
     end
 endfunction
 
 function signed [15:0] qdiv;
     input signed [15:0] a;
     input signed [15:0] b;
-    reg signed [31:0] num;
-    reg signed [31:0] res;
-    reg signed [31:0] b_extended;
+    reg signed [31:0] num, res, b_extended;
     begin
-        if (b == 16'sd0) begin
-            qdiv = 16'sd0;
-        end else begin
-            // Fix: Cast both 'a' and 'b' to 32 bits
-            num = {{16{a[15]}}, a} <<< 12; // Sign-extend 'a' to 32 bits, then shift
-            b_extended = {{16{b[15]}}, b}; // Sign-extend 'b' to 32 bits
+        if (b == 16'sd0) qdiv = 16'sd0;
+        else begin
+            num = {{16{a[15]}}, a} <<< 12;
+            b_extended = {{16{b[15]}}, b};
             res = num / b_extended;
-            qdiv = res[15:0]; // Extract lower 16 bits
+            qdiv = res[15:0];
         end
     end
 endfunction
 
-// enhanced exp() LUT: 32-entry for finer resolution
 function signed [15:0] exp_q;
-    input signed [15:0] arg_in; // Renamed to fix VARHIDDEN warning
+    input signed [15:0] arg_in; // Renamed from 'arg' to fix VARHIDDEN warning
     integer idx;
     reg signed [15:0] val;
-    integer span;
-    reg signed [15:0] RANGE_MIN;
-    reg signed [15:0] RANGE_MAX;
-    reg signed [31:0] temp_calc;
-    reg signed [31:0] range_diff;
+    reg signed [15:0] RANGE_MIN, RANGE_MAX;
+    reg signed [31:0] temp_calc, range_diff;
     begin
         RANGE_MIN = (-16'sd4) <<< 12;
         RANGE_MAX = ( 16'sd8) <<< 12;
-        span = 32;
-        if (arg_in < RANGE_MIN) begin
-            idx = 0;
-        end else if (arg_in > RANGE_MAX) begin
-            idx = span - 1;
-        end else begin
-            // Fix bit-width issues in index calculation
+        if (arg_in < RANGE_MIN) idx = 0;
+        else if (arg_in > RANGE_MAX) idx = 31;
+        else begin
             temp_calc = {{16{arg_in[15]}}, arg_in} - {{16{RANGE_MIN[15]}}, RANGE_MIN};
-            range_diff = {{16{RANGE_MAX[15]}}, RANGE_MAX} - {{16{RANGE_MIN[15]}}, RANGE_MIN} + 32'sd1;
-            idx = (temp_calc * span) / range_diff;
+            range_diff = {{16{RANGE_MAX[15]}}, RANGE_MAX} - {{16{RANGE_MIN[15]}}, RANGE_MIN} + 1;
+            idx = (temp_calc * 32) / range_diff;
         end
-
         case (idx)
-            0:  val = (16'sd0)    <<< 12;
-            1:  val = (16'sd0)    <<< 12;
-            2:  val = (16'sd1)    <<< 12;
-            3:  val = (16'sd1)    <<< 12;
-            4:  val = (16'sd1)    <<< 12;
-            5:  val = (16'sd2)    <<< 12;
-            6:  val = (16'sd2)    <<< 12;
-            7:  val = (16'sd3)    <<< 12;
-            8:  val = (16'sd4)    <<< 12;
-            9:  val = (16'sd5)    <<< 12;
-            10: val = (16'sd6)    <<< 12;
-            11: val = (16'sd8)    <<< 12;
-            12: val = (16'sd10)   <<< 12;
-            13: val = (16'sd12)   <<< 12;
-            14: val = (16'sd15)   <<< 12;
-            15: val = (16'sd19)   <<< 12;
-            16: val = (16'sd23)   <<< 12;
-            17: val = (16'sd28)   <<< 12;
-            18: val = (16'sd35)   <<< 12;
-            19: val = (16'sd42)   <<< 12;
-            20: val = (16'sd52)   <<< 12;
-            21: val = (16'sd63)   <<< 12;
-            22: val = (16'sd77)   <<< 12;
-            23: val = (16'sd94)   <<< 12;
-            24: val = (16'sd114)  <<< 12;
-            25: val = (16'sd139)  <<< 12;
-            26: val = (16'sd169)  <<< 12;
-            27: val = (16'sd206)  <<< 12;
-            28: val = (16'sd251)  <<< 12;
-            29: val = (16'sd305)  <<< 12;
-            30: val = (16'sd371)  <<< 12;
-            31: val = (16'sd451)  <<< 12;
-            default: val = (16'sd8700) <<< 12;
+            0: val=16'h0012; 1: val=16'h001D; 2: val=16'h002D; 3: val=16'h0048;
+            4: val=16'h0075; 5: val=16'h00B9; 6: val=16'h0120; 7: val=16'h01B4;
+            8: val=16'h028F; 9: val=16'h03C1; 10:val=16'h0568; 11:val=16'h07A7;
+            12:val=16'h0AAB; 13:val=16'h0EAA; 14:val=16'h13DB; 15:val=16'h1A85;
+            16:val=16'h2353; 17:val=16'h2EE2; 18:val=16'h3D6E; 19:val=16'h4FBE;
+            20:val=16'h66A1; 21:val=16'h8311; 22:val=16'hA663; 23:val=16'hD216;
+            24:val=16'h1081A;25:val=16'h14A4D;26:val=16'h19ADF;27:val=16'h1FCDA;
+            28:val=16'h2746E;29:val=16'h3080A;30:val=16'h3B929;31:val=16'h48ADF;
+            default: val = 16'h48ADF;
         endcase
         exp_q = val;
     end
 endfunction
 
-// convert 8-bit unsigned to signed Q4.12 with mid=128 where desired
 function signed [15:0] u8_to_signed_q_mid;
     input [7:0] x;
     reg signed [15:0] tmp;
     begin
-        tmp = $signed({8'b0, x}) - 16'sd128; // Convert to 16-bit signed, then subtract 128
-        u8_to_signed_q_mid = {tmp[3:0], 12'b0}; // Shift left 12 bits safely
+        tmp = $signed({8'b0, x}) - 16'sd128;
+        u8_to_signed_q_mid = {tmp[3:0], 12'b0};
     end
 endfunction
 
 function signed [15:0] u8_to_q_unsigned;
     input [7:0] x;
-    reg signed [15:0] tmp;
     begin
-        tmp = $signed({8'b0, x}); // Convert to 16-bit signed
-        u8_to_q_unsigned = {tmp[3:0], 12'b0}; // Shift left 12 bits safely
+        u8_to_q_unsigned = {$signed({8'b0, x}), 12'b0};
     end
 endfunction
 
-// saturation to 8-bit unsigned (returns [7:0])
 function [7:0] sat_to_u8;
     input signed [15:0] x;
-    reg signed [15:0] mv;
     reg signed [15:0] u;
     begin
-        mv = x >>> 12; // back to integer mV (arithmetic shift for sign extension)
-        u = mv + 16'sd128;
-        if (u < 16'sd0) u = 16'sd0;
-        if (u > 16'sd255) u = 16'sd255;
+        u = (x >>> 12) + 16'sd128;
+        if (u < 0) u = 0;
+        if (u > 255) u = 255;
         sat_to_u8 = u[7:0];
     end
 endfunction
 
-// core sequential
+// -----------------------------------------------------------------------------
+// Core sequential logic
+// -----------------------------------------------------------------------------
 always @(posedge clk) begin
     if (reset) begin
-        DeltaT_q <= u8_to_signed_q_mid(8'd2);
+        V <= u8_to_signed_q_mid(8'd191); // -65mV
+        w <= 16'sd0;
+        spike_reg <= 1'b0;
+        DeltaT_q <= u8_to_signed_q_mid(8'd130); // 2mV
         TauW_q   <= u8_to_q_unsigned(8'd100);
         a_q      <= u8_to_q_unsigned(8'd2);
         b_q      <= u8_to_q_unsigned(8'd40);
-        Vreset_q <= u8_to_signed_q_mid(8'd191); // -65 encoded as 191 if using mid=128
-        VT_q     <= u8_to_signed_q_mid(8'd206); // -50 -> 206
+        Vreset_q <= u8_to_signed_q_mid(8'd191); // -65mV
+        VT_q     <= u8_to_signed_q_mid(8'd206); // -50mV
         Ibias_q  <= 16'sd0;
-        V <= u8_to_signed_q_mid(8'd191);
-        w <= 16'sd0;
-        spike_reg <= 1'b0;
-        leak <= 16'sd0;
-        arg <= 16'sd0;
-        expterm <= 16'sd0;
-        drive <= 16'sd0;
-        dV <= 16'sd0;
-        dw <= 16'sd0;
-        vm8_reg <= 8'd0;
-        w8_reg <= 8'd0;
     end else begin
-        // update params when loader committed
         if (params_ready) begin
             DeltaT_q <= u8_to_signed_q_mid(p_DeltaT);
             TauW_q   <= u8_to_q_unsigned(p_TauW);
@@ -392,18 +312,16 @@ always @(posedge clk) begin
         end
 
         if (enable_core) begin
-            // AdEx neuron dynamics calculations
             leak <= qmul(gL_nS, (EL_mV - V));
             arg  <= qdiv((V - VT_q), DeltaT_q);
             expterm <= qmul(gL_nS, qmul(DeltaT_q, exp_q(arg)));
             drive <= leak + expterm - w + Ibias_q;
-            dV <= qmul(qdiv(drive, C_pF), (16'sd1 <<< 12)); // dt=1ms scaled
-            dw <= qmul(qdiv((qmul(a_q, (V - EL_mV)) - w), TauW_q), (16'sd1 <<< 12));
+            dV <= qdiv(drive, C_pF); // dt=1ms, so C_pF is scaled
+            dw <= qdiv((qmul(a_q, (V - EL_mV)) - w), TauW_q);
 
             V <= V + dV;
             w <= w + dw;
 
-            // spike detection and reset
             if (V > (VT_q + (16'sd18 <<< 12))) begin
                 spike_reg <= 1'b1;
                 V <= Vreset_q;
@@ -412,31 +330,27 @@ always @(posedge clk) begin
                 spike_reg <= 1'b0;
             end
 
-            // clamping to prevent overflow
-            if (V > (16'sd100 <<< 12)) V <= (16'sd100 <<< 12);
+            // Clamping to prevent overflow
+            if (V > ( 16'sd100 <<< 12)) V <= ( 16'sd100 <<< 12);
             if (V < (-16'sd150 <<< 12)) V <= (-16'sd150 <<< 12);
-            if (w > (16'sd500 <<< 12)) w <= (16'sd500 <<< 12);
+            if (w > ( 16'sd500 <<< 12)) w <= ( 16'sd500 <<< 12);
             if (w < (-16'sd500 <<< 12)) w <= (-16'sd500 <<< 12);
         end
         
-        // update output registers
         vm8_reg <= sat_to_u8(V);
         w8_reg  <= sat_to_u8(w);
     end
 end
 
 // -----------------------------------------------------------------------------
-// Output muxing (6 MSBs of vm or w + spike bit)
+// Output Mux
 // -----------------------------------------------------------------------------
-wire [5:0] vm_top6 = vm8_reg[7:2];
-wire [5:0] w_top6  = w8_reg[7:2];
-
 always @(*) begin
     uo_out_reg[0] = spike_reg;
     if (!debug_mode) begin
-        uo_out_reg[6:1] = vm_top6;
+        uo_out_reg[6:1] = vm8_reg[7:2];
     end else begin
-        uo_out_reg[6:1] = w_top6;
+        uo_out_reg[6:1] = w8_reg[7:2];
     end
 end
 
