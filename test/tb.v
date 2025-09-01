@@ -24,7 +24,7 @@ module tb ();
 
   // IMPORTANT: Replace 'tt_um_your_github_username_adexp_neuron' with the
   // exact name of your top-level Verilog module.
-  tt_um_dpi_adexp dut (
+  tt_um_dpi_adexp user_project (
       .ui_in  (ui_in),    // Dedicated inputs
       .uo_out (uo_out),   // Dedicated outputs
       .uio_in (uio_in),   // IOs: Input path

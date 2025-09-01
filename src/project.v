@@ -19,25 +19,14 @@ module tt_um_dpi_adexp (
     input  wire       rst_n     // reset_n - low to reset
 );
 
-`ifdef USE_LUT16
-    adex_neuron_system_tt_lut16 core (
-        .clk(clk),
-        .rst_n(rst_n),
-        .ui_in(ui_in),
-        .uo_out(uo_out),
-        .uio_in(uio_in),
-        .uio_out(uio_out),
-        .uio_oe(uio_oe)
-    );
-`else
-    adex_neuron_system_tt_lut32 core (
-        .clk(clk),
-        .rst_n(rst_n),
-        .ui_in(ui_in),
-        .uo_out(uo_out),
-        .uio_in(uio_in),
-        .uio_out(uio_out),
-        .uio_oe(uio_oe)
-    );
-`endif
+adex_neuron_system_tt_lut32 core (
+    .clk(clk),
+    .rst_n(rst_n),
+    .ui_in(ui_in),
+    .uo_out(uo_out),
+    .uio_in(uio_in),
+    .uio_out(uio_out),
+    .uio_oe(uio_oe)
+);
+
 endmodule
