@@ -50,8 +50,15 @@ always @(posedge clk) begin
         lstate <= L_IDLE; byte_acc <= 8'd0; nibble_cnt <= 1'b0;
         param_idx <= 4'd0; watchdog_cnt <= 12'd0; r_ready <= 1'b0;
         // Default parameters that should produce spiking
-        params[0] <= 8'd130; params[1] <= 8'd100; params[2] <= 8'd1; params[3] <= 8'd5;
-        params[4] <= 8'd63;  params[5] <= 8'd78;  params[6] <= 8'd180; params[7] <= 8'd10;
+        // Using corrected defaults for better spiking behavior
+        params[0] <= 8'd130; // DeltaT = 2 (encoded as 128+2=130)
+        params[1] <= 8'd80;  // TauW = 80
+        params[2] <= 8'd1;   // a = 1  
+        params[3] <= 8'd5;   // b = 5
+        params[4] <= 8'd63;  // Vreset = -65 (encoded as 128-65=63)
+        params[5] <= 8'd78;  // VT = -50 (encoded as 128-50=78)
+        params[6] <= 8'd200; // Ibias = 200 (higher for reliable spiking)
+        params[7] <= 8'd10;  // C = 10
     end else begin
         if (lstate != L_IDLE && watchdog_cnt < WATCHDOG_MAX) watchdog_cnt <= watchdog_cnt + 1'b1;
         else if (lstate != L_IDLE) begin lstate <= L_IDLE; nibble_cnt <= 1'b0; param_idx <= 4'd0; watchdog_cnt <= 12'd0; end
@@ -113,40 +120,61 @@ function signed [15:0] exp_q_enhanced(input signed [15:0] arg_in);
         tcalc = arg_in - RANGE_MIN; 
         range_diff = RANGE_MAX - RANGE_MIN; 
         idx = (tcalc * 32) / range_diff; 
+        if (idx > 31) idx = 31;  // Safety clamp
+        if (idx < 0) idx = 0;    // Safety clamp
     end
     
     case(idx)
-        0: val=6;    1: val=9;    2: val=14;   3: val=21;
-        4: val=31;   5: val=47;   6: val=71;   7: val=107;
-        8: val=162;  9: val=245;  10: val=372; 11: val=564;
-        12: val=855; 13: val=1296;14: val=1964;15: val=2978;
-        16: val=4515;17: val=6844;18: val=10376;19: val=15728;
-        20: val=23850;21: val=32767;22: val=32767;23: val=32767;
-        24: val=32767;25: val=32767;26: val=32767;27: val=32767;
-        28: val=32767;29: val=32767;30: val=32767;31: val=32767;
-        default: val=32767;
+        0: val=16'sd6;      1: val=16'sd9;      2: val=16'sd14;     3: val=16'sd21;
+        4: val=16'sd31;     5: val=16'sd47;     6: val=16'sd71;     7: val=16'sd107;
+        8: val=16'sd162;    9: val=16'sd245;    10: val=16'sd372;   11: val=16'sd564;
+        12: val=16'sd855;   13: val=16'sd1296;  14: val=16'sd1964;  15: val=16'sd2978;
+        16: val=16'sd4515;  17: val=16'sd6844;  18: val=16'sd10376; 19: val=16'sd15728;
+        20: val=16'sd23850; 21: val=16'sd32767; 22: val=16'sd32767; 23: val=16'sd32767;
+        24: val=16'sd32767; 25: val=16'sd32767; 26: val=16'sd32767; 27: val=16'sd32767;
+        28: val=16'sd32767; 29: val=16'sd32767; 30: val=16'sd32767; 31: val=16'sd32767;
+        default: val=16'sd32767;
     endcase
     exp_q_enhanced = val;
 endfunction
 
-// Enhanced multiply with better precision
+// Enhanced multiply with better precision and overflow protection
 function signed [15:0] qmul_enhanced(input signed [15:0] a, input signed [15:0] b);
     reg signed [31:0] temp_mult;
     temp_mult = a * b;
-    qmul_enhanced = temp_mult >>> 8;
+    temp_mult = temp_mult >>> 8;
+    
+    // Saturation
+    if (temp_mult > 32767) 
+        qmul_enhanced = 16'sd32767;
+    else if (temp_mult < -32768) 
+        qmul_enhanced = -16'sd32768;
+    else 
+        qmul_enhanced = temp_mult[15:0];
 endfunction
 
-// Enhanced division with saturation
+// Enhanced division with saturation and improved safety
 function signed [15:0] qdiv_enhanced(input signed [15:0] a, input signed [15:0] b);
     reg signed [31:0] temp_div;
-    if (b == 16'sd0) qdiv_enhanced = 16'sd0;
-    else if (b[15] && (b > -16'sd4)) qdiv_enhanced = a[15] ? 16'sd32767 : -16'sd32768; // avoid div by tiny negative
-    else if (!b[15] && (b < 16'sd4)) qdiv_enhanced = a[15] ? -16'sd32768 : 16'sd32767; // avoid div by tiny positive
-    else begin
+    reg signed [15:0] abs_b;
+    
+    abs_b = (b[15]) ? -b : b;  // Absolute value of b
+    
+    if (b == 16'sd0) 
+        qdiv_enhanced = 16'sd0;
+    else if (abs_b < 16'sd4) begin  // Very small divisor
+        if ((a[15] ^ b[15]) == 1'b0)  // Same sign
+            qdiv_enhanced = 16'sd32767;
+        else  // Different signs
+            qdiv_enhanced = -16'sd32768;
+    end else begin
         temp_div = (a <<< 8) / b;
-        if (temp_div > 32767) qdiv_enhanced = 16'sd32767;
-        else if (temp_div < -32768) qdiv_enhanced = -16'sd32768;
-        else qdiv_enhanced = temp_div[15:0];
+        if (temp_div > 32767) 
+            qdiv_enhanced = 16'sd32767;
+        else if (temp_div < -32768) 
+            qdiv_enhanced = -16'sd32768;
+        else 
+            qdiv_enhanced = temp_div[15:0];
     end
 endfunction
 
@@ -233,11 +261,11 @@ always @(posedge clk) begin
                     dW <= qdiv_enhanced(adaptation_term - w, u8_to_q_unsigned_direct(p_TauW));
                     
                     // Check for spike and update
-                    if((V + dV) > u8_to_signed_q_direct(p_VT)) begin
+                    if((V + dV) >= u8_to_signed_q_direct(p_VT)) begin
                         spike_reg <= 1'b1; 
                         V <= u8_to_signed_q_direct(p_Vreset); 
                         w <= w + dW + u8_to_q_unsigned_direct(p_b);
-                        refrac_cnt <= 3'd1;
+                        refrac_cnt <= 3'd2;  // Increased refractory period
                     end else begin
                         spike_reg <= 1'b0;
                         V <= V + dV; 
@@ -255,8 +283,13 @@ always @(posedge clk) begin
             if(refrac_cnt > 3'd0) begin
                 refrac_cnt <= refrac_cnt - 1'b1;
                 spike_reg <= 1'b0;
+                // Keep V at reset during refractory period
+                V <= u8_to_signed_q_direct(p_Vreset);
             end
-            if(!enable_core) compute_state <= C_LEAK;
+            if(!enable_core) begin
+                compute_state <= C_LEAK;
+                spike_reg <= 1'b0;
+            end
         end
     end
 end
@@ -264,8 +297,10 @@ end
 // Output assignment
 always @(*) begin
     uo_out_reg[0] = spike_reg;
-    if(!debug_mode) uo_out_reg[6:1] = vm8_reg[7:2];
-    else uo_out_reg[6:1] = w8_reg[7:2];
+    if(!debug_mode) 
+        uo_out_reg[6:1] = vm8_reg[7:2];
+    else 
+        uo_out_reg[6:1] = w8_reg[7:2];
 end
 
 endmodule
